@@ -1,0 +1,18 @@
+{
+  "name": "ahs1",
+  "private": true,
+  "version": "0.1.0",
+  "description": "AHS1 — Audio Hub Stream v1 — monorepo",
+  "packageManager": "pnpm@9.0.0",
+  "scripts": {
+    "build": "turbo run build",
+    "dev": "turbo run dev",
+    "lint": "turbo run lint",
+    "test": "turbo run test",
+    "typecheck": "turbo run typecheck"
+  },
+  "devDependencies": {
+    "turbo": "^2.0.0",
+    "typescript": "^5.5.0"
+  }
+}

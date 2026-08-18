@@ -1,0 +1,20 @@
+node_modules/
+.turbo/
+dist/
+.next/
+*.log
+.env
+.env.local
+.DS_Store
+
+# Android
+apps/android/.gradle/
+apps/android/build/
+apps/android/*/build/
+apps/android/local.properties
+apps/android/.idea/
+apps/android/*.iml
+
+# Supabase local
+supabase/.temp/
+supabase/.branches/
