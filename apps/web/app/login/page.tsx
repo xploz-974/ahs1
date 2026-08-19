@@ -1,7 +1,7 @@
 "use client";
 
 import { useFormState, useFormStatus } from "react-dom";
-import { signIn } from "./actions";
+import { signIn, type AuthState } from "./actions";
 
 function SubmitButton() {
   const { pending } = useFormStatus();
@@ -17,7 +17,7 @@ function SubmitButton() {
 }
 
 export default function LoginPage() {
-  const [state, formAction] = useFormState(signIn, { error: null });
+  const [state, formAction] = useFormState<AuthState, FormData>(signIn, { error: null });
 
   return (
     <div className="flex min-h-screen items-center justify-center px-4">

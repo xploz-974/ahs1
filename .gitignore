@@ -6,6 +6,8 @@ dist/
 .env
 .env.local
 .DS_Store
+next-env.d.ts
+*.tsbuildinfo
 
 # Android
 apps/android/.gradle/
