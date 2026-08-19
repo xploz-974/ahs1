@@ -5,7 +5,7 @@ Plateforme de diffusion audio pour commerces : musique d'ambiance, jingles, publ
 ## Statut
 
 - **Phase 1 — Architecture + Supabase** ✅ terminée. Schéma + RLS appliqués sur le projet Supabase cloud (`ppnhcoikhuzyncwsusjt`), buckets Storage créés, seed de dev en place.
-- **Phase 2 — Auth admin + Dashboard skeleton** en cours. Voir `apps/web`.
+- **Phase 2 — Auth admin + Dashboard skeleton** en cours. Voir `apps/web`. Déployé sur Netlify depuis [github.com/xploz-974/ahs1](https://github.com/xploz-974/ahs1) (branche `main`).
 
 Voir [docs/architecture.md](docs/architecture.md) pour la vue d'ensemble validée et [docs/database.md](docs/database.md) pour le schéma. Plan de développement complet (17 phases) : `docs/architecture.md#plan-de-développement`.
 
@@ -49,6 +49,10 @@ pnpm dev
 ```
 
 Un compte doit exister dans **Authentication** sur le dashboard Supabase, et être lié à une organisation via `organization_members` (voir `supabase/seed/seed.sql`) pour voir des données.
+
+## Déploiement Netlify
+
+Config dans `netlify.toml` à la racine (build via Turborepo, publish `apps/web/.next`, plugin `@netlify/plugin-nextjs` pour le middleware et les server actions). Variables d'environnement requises sur le site Netlify : `NEXT_PUBLIC_SUPABASE_URL`, `NEXT_PUBLIC_SUPABASE_ANON_KEY`.
 
 ## Nomenclature
 

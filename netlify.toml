@@ -1,0 +1,6 @@
+[build]
+  command = "turbo run build --filter @ahs1/web"
+  publish = "apps/web/.next"
+
+[[plugins]]
+  package = "@netlify/plugin-nextjs"
