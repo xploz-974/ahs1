@@ -124,13 +124,20 @@ export async function finalizeAudioUpload(input: FinalizeUploadInput): Promise<U
   }
 
   const title = parsed.title ?? input.fileName.replace(/\.[^.]+$/, "");
-  const artistId = parsed.artist
-    ? await findOrCreateArtist(supabase, organizationId, parsed.artist)
-    : null;
-  const albumId = parsed.album
-    ? await findOrCreateAlbum(supabase, organizationId, parsed.album, artistId)
-    : null;
-  const genreId = parsed.genre ? await findOrCreateGenre(supabase, parsed.genre) : null;
+  let artistId: string | null = null;
+  let albumId: string | null = null;
+  let genreId: string | null = null;
+  try {
+    artistId = parsed.artist ? await findOrCreateArtist(supabase, organizationId, parsed.artist) : null;
+    albumId = parsed.album
+      ? await findOrCreateAlbum(supabase, organizationId, parsed.album, artistId)
+      : null;
+    genreId = parsed.genre ? await findOrCreateGenre(supabase, parsed.genre) : null;
+  } catch (e) {
+    await supabase.storage.from(input.bucket).remove([input.storagePath]);
+    const message = e instanceof Error ? e.message : "erreur inconnue";
+    return { error: `Échec de la résolution artiste/album/genre : ${message}`, success: null };
+  }
 
   const { error: insertError } = await supabase.from("audio_files").insert({
     organization_id: organizationId,
@@ -195,15 +202,21 @@ export async function updateAudioFile(input: UpdateAudioFileInput): Promise<Uplo
     return { error: "Le titre ne peut pas être vide.", success: null };
   }
 
-  const artistId = input.artistName.trim()
-    ? await findOrCreateArtist(supabase, organizationId, input.artistName.trim())
-    : null;
-  const albumId = input.albumTitle.trim()
-    ? await findOrCreateAlbum(supabase, organizationId, input.albumTitle.trim(), artistId)
-    : null;
-  const genreId = input.genreName.trim()
-    ? await findOrCreateGenre(supabase, input.genreName.trim())
-    : null;
+  let artistId: string | null = null;
+  let albumId: string | null = null;
+  let genreId: string | null = null;
+  try {
+    artistId = input.artistName.trim()
+      ? await findOrCreateArtist(supabase, organizationId, input.artistName.trim())
+      : null;
+    albumId = input.albumTitle.trim()
+      ? await findOrCreateAlbum(supabase, organizationId, input.albumTitle.trim(), artistId)
+      : null;
+    genreId = input.genreName.trim() ? await findOrCreateGenre(supabase, input.genreName.trim()) : null;
+  } catch (e) {
+    const message = e instanceof Error ? e.message : "erreur inconnue";
+    return { error: `Échec de la résolution artiste/album/genre : ${message}`, success: null };
+  }
 
   const { error } = await supabase
     .from("audio_files")
