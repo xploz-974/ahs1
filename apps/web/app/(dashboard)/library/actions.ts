@@ -5,6 +5,9 @@ import { createClient } from "@/lib/supabase/server";
 import { getCurrentOrganizationId } from "@/lib/org";
 import { parseAudioBuffer, sha256 } from "@/lib/audio";
 import { detectFormat, type AudioFormat } from "@/lib/audio-shared";
+import { searchMusicBrainz } from "@/lib/musicbrainz";
+import { isSpotifyConfigured, searchSpotify } from "@/lib/spotify";
+import type { MetadataCandidate } from "@/lib/metadata-types";
 
 export type UploadState = { error: string | null; success: string | null };
 
@@ -152,4 +155,71 @@ export async function finalizeAudioUpload(input: FinalizeUploadInput): Promise<U
 
   revalidatePath("/library");
   return { error: null, success: `« ${title} » importé avec succès.` };
+}
+
+export interface MetadataSearchResult {
+  candidates: MetadataCandidate[];
+  spotifyEnabled: boolean;
+}
+
+export async function searchMetadata(title: string, artist: string): Promise<MetadataSearchResult> {
+  const spotifyEnabled = isSpotifyConfigured();
+
+  const [musicbrainz, spotify] = await Promise.all([
+    searchMusicBrainz(title, artist).catch(() => []),
+    spotifyEnabled ? searchSpotify(title, artist).catch(() => []) : Promise.resolve([]),
+  ]);
+
+  return { candidates: [...spotify, ...musicbrainz], spotifyEnabled };
+}
+
+export interface UpdateAudioFileInput {
+  id: string;
+  title: string;
+  artistName: string;
+  albumTitle: string;
+  genreName: string;
+  category: string;
+}
+
+export async function updateAudioFile(input: UpdateAudioFileInput): Promise<UploadState> {
+  const supabase = createClient();
+
+  const organizationId = await getCurrentOrganizationId(supabase);
+  if (!organizationId) {
+    return { error: "Aucune organisation associée à ce compte.", success: null };
+  }
+
+  const title = input.title.trim();
+  if (!title) {
+    return { error: "Le titre ne peut pas être vide.", success: null };
+  }
+
+  const artistId = input.artistName.trim()
+    ? await findOrCreateArtist(supabase, organizationId, input.artistName.trim())
+    : null;
+  const albumId = input.albumTitle.trim()
+    ? await findOrCreateAlbum(supabase, organizationId, input.albumTitle.trim(), artistId)
+    : null;
+  const genreId = input.genreName.trim()
+    ? await findOrCreateGenre(supabase, input.genreName.trim())
+    : null;
+
+  const { error } = await supabase
+    .from("audio_files")
+    .update({
+      title,
+      artist_id: artistId,
+      album_id: albumId,
+      genre_id: genreId,
+      category: input.category,
+    })
+    .eq("id", input.id);
+
+  if (error) {
+    return { error: `Échec de la mise à jour : ${error.message}`, success: null };
+  }
+
+  revalidatePath("/library");
+  return { error: null, success: `« ${title} » mis à jour.` };
 }
