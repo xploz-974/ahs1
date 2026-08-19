@@ -1,8 +1,10 @@
 "use client";
 
 import { useState, useTransition } from "react";
-import { searchMetadata, updateAudioFile } from "./actions";
+import { getSignedAudioUrl, searchMetadata, updateAudioFile } from "./actions";
 import type { MetadataCandidate } from "@/lib/metadata-types";
+import { WaveformEditor } from "./waveform-editor";
+import { PlayerBar, type NowPlayingTrack } from "./player-bar";
 
 export type AudioFileRow = {
   id: string;
@@ -14,6 +16,11 @@ export type AudioFileRow = {
   file_size: number;
   checksum: string;
   category: string;
+  storage_path: string;
+  trim_start_ms: number;
+  trim_end_ms: number | null;
+  fade_in_ms: number;
+  fade_out_ms: number;
   created_at: string;
   artists: { name: string } | null;
   albums: { title: string } | null;
@@ -38,7 +45,15 @@ function formatSize(bytes: number): string {
   return `${(bytes / (1024 * 1024)).toFixed(1)} Mo`;
 }
 
-function EditRow({ file, onDone }: { file: AudioFileRow; onDone: () => void }) {
+function EditRow({
+  file,
+  allFiles,
+  onDone,
+}: {
+  file: AudioFileRow;
+  allFiles: AudioFileRow[];
+  onDone: () => void;
+}) {
   const [title, setTitle] = useState(file.title);
   const [artistName, setArtistName] = useState(file.artists?.name ?? "");
   const [albumTitle, setAlbumTitle] = useState(file.albums?.title ?? "");
@@ -49,6 +64,7 @@ function EditRow({ file, onDone }: { file: AudioFileRow; onDone: () => void }) {
   const [error, setError] = useState<string | null>(null);
   const [isSearching, startSearch] = useTransition();
   const [isSaving, startSave] = useTransition();
+  const [showWaveform, setShowWaveform] = useState(false);
 
   function applyCandidate(c: MetadataCandidate) {
     setTitle(c.title);
@@ -89,7 +105,7 @@ function EditRow({ file, onDone }: { file: AudioFileRow; onDone: () => void }) {
 
   return (
     <tr className="bg-ink-900">
-      <td colSpan={10} className="px-4 py-4">
+      <td colSpan={11} className="px-4 py-4">
         <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
           <div>
             <label className="mb-1 block text-xs text-ink-400">Titre</label>
@@ -125,6 +141,13 @@ function EditRow({ file, onDone }: { file: AudioFileRow; onDone: () => void }) {
             className="rounded-md border border-ink-600 px-3 py-1.5 text-xs text-ink-200 transition hover:bg-ink-800 disabled:opacity-60"
           >
             {isSearching ? "Recherche…" : "Vérifier en ligne (MusicBrainz + Spotify)"}
+          </button>
+          <button
+            type="button"
+            onClick={() => setShowWaveform((v) => !v)}
+            className="rounded-md border border-ink-600 px-3 py-1.5 text-xs text-ink-200 transition hover:bg-ink-800"
+          >
+            {showWaveform ? "Masquer la découpe" : "Découpe & fondu"}
           </button>
           <button
             type="button"
@@ -176,6 +199,22 @@ function EditRow({ file, onDone }: { file: AudioFileRow; onDone: () => void }) {
             ))}
           </div>
         )}
+
+        {showWaveform && (
+          <WaveformEditor
+            audioFileId={file.id}
+            category={file.category}
+            storagePath={file.storage_path}
+            durationMs={file.duration_ms}
+            initialTrimStartMs={file.trim_start_ms}
+            initialTrimEndMs={file.trim_end_ms}
+            initialFadeInMs={file.fade_in_ms}
+            initialFadeOutMs={file.fade_out_ms}
+            mixOptions={allFiles
+              .filter((f) => f.id !== file.id)
+              .map((f) => ({ id: f.id, title: f.title, category: f.category, storagePath: f.storage_path }))}
+          />
+        )}
       </td>
     </tr>
   );
@@ -183,57 +222,89 @@ function EditRow({ file, onDone }: { file: AudioFileRow; onDone: () => void }) {
 
 export function LibraryTable({ files }: { files: AudioFileRow[] }) {
   const [editingId, setEditingId] = useState<string | null>(null);
+  const [nowPlaying, setNowPlaying] = useState<NowPlayingTrack | null>(null);
+  const [loadingPlayId, setLoadingPlayId] = useState<string | null>(null);
+
+  async function play(f: AudioFileRow) {
+    setLoadingPlayId(f.id);
+    const { url, error } = await getSignedAudioUrl(f.category, f.storage_path);
+    setLoadingPlayId(null);
+    if (error || !url) return;
+    setNowPlaying({
+      id: f.id,
+      title: f.title,
+      artist: f.artists?.name ?? null,
+      url,
+      trimStartMs: f.trim_start_ms,
+      trimEndMs: f.trim_end_ms,
+    });
+  }
 
   return (
-    <div className="mt-6 overflow-x-auto rounded-lg border border-ink-700">
-      <table className="w-full text-left text-sm">
-        <thead className="bg-ink-900 text-xs uppercase tracking-wide text-ink-400">
-          <tr>
-            <th className="px-4 py-3 font-medium">Titre</th>
-            <th className="px-4 py-3 font-medium">Artiste</th>
-            <th className="px-4 py-3 font-medium">Genre</th>
-            <th className="px-4 py-3 font-medium">Catégorie</th>
-            <th className="px-4 py-3 font-medium">Durée</th>
-            <th className="px-4 py-3 font-medium">Format</th>
-            <th className="px-4 py-3 font-medium">Bitrate</th>
-            <th className="px-4 py-3 font-medium">Taille</th>
-            <th className="px-4 py-3 font-medium">Checksum</th>
-            <th className="px-4 py-3 font-medium"></th>
-          </tr>
-        </thead>
-        <tbody className="divide-y divide-ink-700 bg-ink-950">
-          {files.map((f) =>
-            editingId === f.id ? (
-              <EditRow key={f.id} file={f} onDone={() => setEditingId(null)} />
-            ) : (
-              <tr key={f.id}>
-                <td className="px-4 py-3 text-ink-100">{f.title}</td>
-                <td className="px-4 py-3 text-ink-300">{f.artists?.name ?? "—"}</td>
-                <td className="px-4 py-3 text-ink-300">{f.genres?.name ?? "—"}</td>
-                <td className="px-4 py-3 text-ink-300">{CATEGORY_LABEL[f.category] ?? f.category}</td>
-                <td className="px-4 py-3 font-mono text-xs text-ink-400">{formatDuration(f.duration_ms)}</td>
-                <td className="px-4 py-3 font-mono text-xs uppercase text-ink-400">{f.format}</td>
-                <td className="px-4 py-3 font-mono text-xs text-ink-400">
-                  {f.bitrate ? `${Math.round(f.bitrate / 1000)} kb/s` : "—"}
-                </td>
-                <td className="px-4 py-3 font-mono text-xs text-ink-400">{formatSize(f.file_size)}</td>
-                <td className="px-4 py-3 font-mono text-[11px] text-ink-600" title={f.checksum}>
-                  {f.checksum.slice(0, 12)}…
-                </td>
-                <td className="px-4 py-3 text-right">
-                  <button
-                    type="button"
-                    onClick={() => setEditingId(f.id)}
-                    className="rounded-md border border-ink-600 px-2.5 py-1 text-xs text-ink-300 transition hover:bg-ink-800"
-                  >
-                    Modifier
-                  </button>
-                </td>
-              </tr>
-            )
-          )}
-        </tbody>
-      </table>
-    </div>
+    <>
+      <div className="mt-6 overflow-x-auto rounded-lg border border-ink-700 pb-16">
+        <table className="w-full text-left text-sm">
+          <thead className="bg-ink-900 text-xs uppercase tracking-wide text-ink-400">
+            <tr>
+              <th className="px-4 py-3 font-medium"></th>
+              <th className="px-4 py-3 font-medium">Titre</th>
+              <th className="px-4 py-3 font-medium">Artiste</th>
+              <th className="px-4 py-3 font-medium">Genre</th>
+              <th className="px-4 py-3 font-medium">Catégorie</th>
+              <th className="px-4 py-3 font-medium">Durée</th>
+              <th className="px-4 py-3 font-medium">Format</th>
+              <th className="px-4 py-3 font-medium">Bitrate</th>
+              <th className="px-4 py-3 font-medium">Taille</th>
+              <th className="px-4 py-3 font-medium">Checksum</th>
+              <th className="px-4 py-3 font-medium"></th>
+            </tr>
+          </thead>
+          <tbody className="divide-y divide-ink-700 bg-ink-950">
+            {files.map((f) =>
+              editingId === f.id ? (
+                <EditRow key={f.id} file={f} allFiles={files} onDone={() => setEditingId(null)} />
+              ) : (
+                <tr key={f.id}>
+                  <td className="px-4 py-3">
+                    <button
+                      type="button"
+                      onClick={() => play(f)}
+                      disabled={loadingPlayId === f.id}
+                      className="flex h-7 w-7 items-center justify-center rounded-full border border-ink-600 text-xs text-ink-300 transition hover:bg-ink-800 disabled:opacity-50"
+                    >
+                      {loadingPlayId === f.id ? "…" : "▶"}
+                    </button>
+                  </td>
+                  <td className="px-4 py-3 text-ink-100">{f.title}</td>
+                  <td className="px-4 py-3 text-ink-300">{f.artists?.name ?? "—"}</td>
+                  <td className="px-4 py-3 text-ink-300">{f.genres?.name ?? "—"}</td>
+                  <td className="px-4 py-3 text-ink-300">{CATEGORY_LABEL[f.category] ?? f.category}</td>
+                  <td className="px-4 py-3 font-mono text-xs text-ink-400">{formatDuration(f.duration_ms)}</td>
+                  <td className="px-4 py-3 font-mono text-xs uppercase text-ink-400">{f.format}</td>
+                  <td className="px-4 py-3 font-mono text-xs text-ink-400">
+                    {f.bitrate ? `${Math.round(f.bitrate / 1000)} kb/s` : "—"}
+                  </td>
+                  <td className="px-4 py-3 font-mono text-xs text-ink-400">{formatSize(f.file_size)}</td>
+                  <td className="px-4 py-3 font-mono text-[11px] text-ink-600" title={f.checksum}>
+                    {f.checksum.slice(0, 12)}…
+                  </td>
+                  <td className="px-4 py-3 text-right">
+                    <button
+                      type="button"
+                      onClick={() => setEditingId(f.id)}
+                      className="rounded-md border border-ink-600 px-2.5 py-1 text-xs text-ink-300 transition hover:bg-ink-800"
+                    >
+                      Modifier
+                    </button>
+                  </td>
+                </tr>
+              )
+            )}
+          </tbody>
+        </table>
+      </div>
+
+      <PlayerBar track={nowPlaying} onClose={() => setNowPlaying(null)} />
+    </>
   );
 }

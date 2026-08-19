@@ -4,7 +4,7 @@ import { revalidatePath } from "next/cache";
 import { createClient } from "@/lib/supabase/server";
 import { getCurrentOrganizationId } from "@/lib/org";
 import { parseAudioBuffer, sha256 } from "@/lib/audio";
-import { detectFormat, type AudioFormat } from "@/lib/audio-shared";
+import { detectFormat, CATEGORY_BUCKET, type AudioFormat } from "@/lib/audio-shared";
 import { searchMusicBrainz } from "@/lib/musicbrainz";
 import { isSpotifyConfigured, searchSpotify } from "@/lib/spotify";
 import type { MetadataCandidate } from "@/lib/metadata-types";
@@ -235,4 +235,53 @@ export async function updateAudioFile(input: UpdateAudioFileInput): Promise<Uplo
 
   revalidatePath("/library");
   return { error: null, success: `« ${title} » mis à jour.` };
+}
+
+export interface SignedAudioUrlResult {
+  url: string | null;
+  error: string | null;
+}
+
+export async function getSignedAudioUrl(category: string, storagePath: string): Promise<SignedAudioUrlResult> {
+  const supabase = createClient();
+  const bucket = CATEGORY_BUCKET[category];
+  if (!bucket) {
+    return { url: null, error: "Catégorie inconnue." };
+  }
+
+  const { data, error } = await supabase.storage.from(bucket).createSignedUrl(storagePath, 300);
+  if (error || !data) {
+    return { url: null, error: error?.message ?? "URL signée indisponible." };
+  }
+
+  return { url: data.signedUrl, error: null };
+}
+
+export interface UpdateAudioTrimInput {
+  id: string;
+  trimStartMs: number;
+  trimEndMs: number | null;
+  fadeInMs: number;
+  fadeOutMs: number;
+}
+
+export async function updateAudioTrim(input: UpdateAudioTrimInput): Promise<UploadState> {
+  const supabase = createClient();
+
+  const { error } = await supabase
+    .from("audio_files")
+    .update({
+      trim_start_ms: input.trimStartMs,
+      trim_end_ms: input.trimEndMs,
+      fade_in_ms: input.fadeInMs,
+      fade_out_ms: input.fadeOutMs,
+    })
+    .eq("id", input.id);
+
+  if (error) {
+    return { error: `Échec de l'enregistrement des coupes : ${error.message}`, success: null };
+  }
+
+  revalidatePath("/library");
+  return { error: null, success: "Points de coupe enregistrés." };
 }

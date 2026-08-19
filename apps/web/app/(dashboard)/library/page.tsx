@@ -5,7 +5,7 @@ import { FilterBar } from "./filter-bar";
 import { LibraryTable, type AudioFileRow } from "./library-table";
 
 const SELECT_COLUMNS =
-  "id, title, duration_ms, format, bitrate, sample_rate, file_size, checksum, category, created_at, artists(name), albums(title), genres(name)";
+  "id, title, duration_ms, format, bitrate, sample_rate, file_size, checksum, category, storage_path, trim_start_ms, trim_end_ms, fade_in_ms, fade_out_ms, created_at, artists(name), albums(title), genres(name)";
 
 const SORTABLE_FIELDS = new Set(["created_at", "title", "duration_ms"]);
 
