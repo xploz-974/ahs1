@@ -4,9 +4,10 @@ Plateforme de diffusion audio pour commerces : musique d'ambiance, jingles, publ
 
 ## Statut
 
-**Phase 1 — Architecture + Supabase** en cours. Voir [docs/architecture.md](docs/architecture.md) pour la vue d'ensemble validée et [docs/database.md](docs/database.md) pour le schéma.
+- **Phase 1 — Architecture + Supabase** ✅ terminée. Schéma + RLS appliqués sur le projet Supabase cloud (`ppnhcoikhuzyncwsusjt`), buckets Storage créés, seed de dev en place.
+- **Phase 2 — Auth admin + Dashboard skeleton** en cours. Voir `apps/web`.
 
-Plan de développement complet (17 phases) : voir `docs/architecture.md#plan-de-développement`.
+Voir [docs/architecture.md](docs/architecture.md) pour la vue d'ensemble validée et [docs/database.md](docs/database.md) pour le schéma. Plan de développement complet (17 phases) : `docs/architecture.md#plan-de-développement`.
 
 ## Structure du monorepo
 
@@ -32,17 +33,22 @@ supabase/
   seed/        Données de développement
 ```
 
-## Démarrer en local
+## Base de données
 
-Prérequis : Node 20+, pnpm 9+, [Supabase CLI](https://supabase.com/docs/guides/cli).
+Ce projet n'utilise pas de Supabase local — tout tourne sur le projet cloud (`https://ppnhcoikhuzyncwsusjt.supabase.co`). Les migrations dans `supabase/migrations/` et le seed dans `supabase/seed/` sont appliqués manuellement via le **SQL Editor** du dashboard Supabase (copier/coller + Run).
+
+## Dashboard web (`apps/web`)
+
+Prérequis : Node 20+, pnpm 9+ (à installer sur la machine qui build/lance le dashboard).
 
 ```bash
+cd apps/web
+cp .env.example .env.local   # remplir NEXT_PUBLIC_SUPABASE_ANON_KEY
 pnpm install
-supabase start
-supabase db reset   # applique les migrations + seed
+pnpm dev
 ```
 
-Studio local : http://localhost:54323
+Un compte doit exister dans **Authentication** sur le dashboard Supabase, et être lié à une organisation via `organization_members` (voir `supabase/seed/seed.sql`) pour voir des données.
 
 ## Nomenclature
 
