@@ -12,6 +12,7 @@
   "dependencies": {
     "@ahs1/core": "workspace:*",
     "@ahs1/types": "workspace:*",
+    "jose": "^5.9.6",
     "@supabase/ssr": "^0.5.1",
     "@supabase/supabase-js": "^2.45.0",
     "music-metadata": "^10.5.0",
