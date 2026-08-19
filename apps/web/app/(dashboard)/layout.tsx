@@ -5,7 +5,7 @@ import { signOut } from "../login/actions";
 const NAV_ITEMS = [
   { label: "Dashboard", href: "/", enabled: true },
   { label: "Bibliothèque", href: "/library", enabled: true },
-  { label: "Playlists", href: "/playlists", enabled: false },
+  { label: "Playlists", href: "/playlists", enabled: true },
   { label: "Jingles", href: "/jingles", enabled: false },
   { label: "Publicités", href: "/ads", enabled: false },
   { label: "Programmation", href: "/schedule", enabled: false },
