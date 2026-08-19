@@ -4,6 +4,7 @@ import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import { createClient } from "@/lib/supabase/server";
 import { getCurrentOrganizationId } from "@/lib/org";
+import { bumpStoreManifest } from "@/lib/manifest";
 
 export type ActionState = { error: string | null; success: string | null };
 
@@ -39,6 +40,21 @@ async function bumpVersion(supabase: ReturnType<typeof createClient>, campaignId
     .from("advertisement_campaigns")
     .update({ version: (data?.version ?? 1) + 1 })
     .eq("id", campaignId);
+}
+
+async function bumpCampaignStoresManifest(
+  supabase: ReturnType<typeof createClient>,
+  campaignId: string,
+  organizationId: string
+) {
+  const { data: stores } = await supabase
+    .from("campaign_stores")
+    .select("store_id")
+    .eq("campaign_id", campaignId);
+
+  for (const s of stores ?? []) {
+    await bumpStoreManifest(supabase, s.store_id, organizationId, ["advertisements_version"]);
+  }
 }
 
 export async function createCampaign(_prevState: ActionState, formData: FormData): Promise<ActionState> {
@@ -152,6 +168,7 @@ export async function updateCampaignMeta(input: UpdateCampaignInput): Promise<Ac
 
 export async function addAssetToCampaign(campaignId: string, audioFileId: string): Promise<ActionState> {
   const supabase = createClient();
+  const organizationId = await getCurrentOrganizationId(supabase);
   const { error } = await supabase
     .from("advertisement_assets")
     .insert({ campaign_id: campaignId, audio_file_id: audioFileId });
@@ -161,12 +178,14 @@ export async function addAssetToCampaign(campaignId: string, audioFileId: string
   }
 
   await bumpVersion(supabase, campaignId);
+  if (organizationId) await bumpCampaignStoresManifest(supabase, campaignId, organizationId);
   revalidatePath(`/ads/${campaignId}`);
   return { error: null, success: null };
 }
 
 export async function removeAssetFromCampaign(campaignId: string, assetId: string): Promise<ActionState> {
   const supabase = createClient();
+  const organizationId = await getCurrentOrganizationId(supabase);
   const { error } = await supabase.from("advertisement_assets").delete().eq("id", assetId);
 
   if (error) {
@@ -174,12 +193,14 @@ export async function removeAssetFromCampaign(campaignId: string, assetId: strin
   }
 
   await bumpVersion(supabase, campaignId);
+  if (organizationId) await bumpCampaignStoresManifest(supabase, campaignId, organizationId);
   revalidatePath(`/ads/${campaignId}`);
   return { error: null, success: null };
 }
 
 export async function setCampaignStores(campaignId: string, storeIds: string[]): Promise<ActionState> {
   const supabase = createClient();
+  const organizationId = await getCurrentOrganizationId(supabase);
 
   await supabase.from("campaign_stores").delete().eq("campaign_id", campaignId);
 
@@ -193,6 +214,11 @@ export async function setCampaignStores(campaignId: string, storeIds: string[]):
   }
 
   await bumpVersion(supabase, campaignId);
+  if (organizationId) {
+    for (const storeId of storeIds) {
+      await bumpStoreManifest(supabase, storeId, organizationId, ["advertisements_version"]);
+    }
+  }
   revalidatePath(`/ads/${campaignId}`);
   return { error: null, success: "Magasins mis à jour." };
 }

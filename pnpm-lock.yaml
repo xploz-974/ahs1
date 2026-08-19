@@ -17,6 +17,9 @@ importers:
 
   apps/web:
     dependencies:
+      '@ahs1/core':
+        specifier: workspace:*
+        version: link:../../packages/core
       '@ahs1/types':
         specifier: workspace:*
         version: link:../../packages/types

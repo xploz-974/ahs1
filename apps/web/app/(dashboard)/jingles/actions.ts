@@ -3,6 +3,7 @@
 import { revalidatePath } from "next/cache";
 import { createClient } from "@/lib/supabase/server";
 import { getCurrentOrganizationId } from "@/lib/org";
+import { bumpStoreManifest } from "@/lib/manifest";
 
 export type ActionState = { error: string | null; success: string | null };
 
@@ -38,6 +39,7 @@ export async function createJingle(_prevState: ActionState, formData: FormData):
     return { error: `Échec de la création : ${error.message}`, success: null };
   }
 
+  await bumpStoreManifest(supabase, storeId, organizationId, ["jingles_version"]);
   revalidatePath("/jingles");
   return { error: null, success: "Jingle créé." };
 }
@@ -54,6 +56,9 @@ export interface UpdateJingleInput {
 
 export async function updateJingle(input: UpdateJingleInput): Promise<ActionState> {
   const supabase = createClient();
+  const organizationId = await getCurrentOrganizationId(supabase);
+
+  const { data: previous } = await supabase.from("jingles").select("store_id").eq("id", input.id).maybeSingle();
 
   const { error } = await supabase
     .from("jingles")
@@ -71,12 +76,25 @@ export async function updateJingle(input: UpdateJingleInput): Promise<ActionStat
     return { error: `Échec de la mise à jour : ${error.message}`, success: null };
   }
 
+  if (organizationId) {
+    await bumpStoreManifest(supabase, input.storeId, organizationId, ["jingles_version"]);
+    if (previous && previous.store_id !== input.storeId) {
+      await bumpStoreManifest(supabase, previous.store_id, organizationId, ["jingles_version"]);
+    }
+  }
   revalidatePath("/jingles");
   return { error: null, success: "Jingle mis à jour." };
 }
 
 export async function deleteJingle(id: string): Promise<void> {
   const supabase = createClient();
+  const organizationId = await getCurrentOrganizationId(supabase);
+  const { data: previous } = await supabase.from("jingles").select("store_id").eq("id", id).maybeSingle();
+
   await supabase.from("jingles").delete().eq("id", id);
+
+  if (organizationId && previous) {
+    await bumpStoreManifest(supabase, previous.store_id, organizationId, ["jingles_version"]);
+  }
   revalidatePath("/jingles");
 }

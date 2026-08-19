@@ -4,6 +4,7 @@ import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import { createClient } from "@/lib/supabase/server";
 import { getCurrentOrganizationId } from "@/lib/org";
+import { bumpStoreManifest } from "@/lib/manifest";
 
 export type ActionState = { error: string | null; success: string | null };
 
@@ -13,6 +14,23 @@ async function bumpVersion(supabase: ReturnType<typeof createClient>, playlistId
     .from("playlists")
     .update({ version: (data?.version ?? 1) + 1 })
     .eq("id", playlistId);
+}
+
+// Un changement de contenu de playlist affecte tous les magasins où elle est
+// diffusée : on incrémente music_version + playlist_version pour chacun.
+async function bumpPlaylistStoresManifest(
+  supabase: ReturnType<typeof createClient>,
+  playlistId: string,
+  organizationId: string
+) {
+  const { data: stores } = await supabase
+    .from("playlist_stores")
+    .select("store_id")
+    .eq("playlist_id", playlistId);
+
+  for (const s of stores ?? []) {
+    await bumpStoreManifest(supabase, s.store_id, organizationId, ["music_version", "playlist_version"]);
+  }
 }
 
 export async function createPlaylist(_prevState: ActionState, formData: FormData): Promise<ActionState> {
@@ -76,6 +94,7 @@ export async function updatePlaylistMeta(input: {
 
 export async function addTrackToPlaylist(playlistId: string, audioFileId: string): Promise<ActionState> {
   const supabase = createClient();
+  const organizationId = await getCurrentOrganizationId(supabase);
 
   const { data: items } = await supabase
     .from("playlist_items")
@@ -95,12 +114,14 @@ export async function addTrackToPlaylist(playlistId: string, audioFileId: string
   }
 
   await bumpVersion(supabase, playlistId);
+  if (organizationId) await bumpPlaylistStoresManifest(supabase, playlistId, organizationId);
   revalidatePath(`/playlists/${playlistId}`);
   return { error: null, success: "Titre ajouté." };
 }
 
 export async function removeTrackFromPlaylist(playlistId: string, itemId: string): Promise<ActionState> {
   const supabase = createClient();
+  const organizationId = await getCurrentOrganizationId(supabase);
   const { error } = await supabase.from("playlist_items").delete().eq("id", itemId);
 
   if (error) {
@@ -108,6 +129,7 @@ export async function removeTrackFromPlaylist(playlistId: string, itemId: string
   }
 
   await bumpVersion(supabase, playlistId);
+  if (organizationId) await bumpPlaylistStoresManifest(supabase, playlistId, organizationId);
   revalidatePath(`/playlists/${playlistId}`);
   return { error: null, success: null };
 }
@@ -118,6 +140,7 @@ export async function reorderTrack(
   direction: "up" | "down"
 ): Promise<ActionState> {
   const supabase = createClient();
+  const organizationId = await getCurrentOrganizationId(supabase);
 
   const { data: items, error } = await supabase
     .from("playlist_items")
@@ -142,12 +165,14 @@ export async function reorderTrack(
   await supabase.from("playlist_items").update({ position: a.position }).eq("id", b.id);
 
   await bumpVersion(supabase, playlistId);
+  if (organizationId) await bumpPlaylistStoresManifest(supabase, playlistId, organizationId);
   revalidatePath(`/playlists/${playlistId}`);
   return { error: null, success: null };
 }
 
 export async function setPlaylistStores(playlistId: string, storeIds: string[]): Promise<ActionState> {
   const supabase = createClient();
+  const organizationId = await getCurrentOrganizationId(supabase);
 
   await supabase.from("playlist_stores").delete().eq("playlist_id", playlistId);
 
@@ -161,6 +186,11 @@ export async function setPlaylistStores(playlistId: string, storeIds: string[]):
   }
 
   await bumpVersion(supabase, playlistId);
+  if (organizationId) {
+    for (const storeId of storeIds) {
+      await bumpStoreManifest(supabase, storeId, organizationId, ["music_version", "playlist_version"]);
+    }
+  }
   revalidatePath(`/playlists/${playlistId}`);
   return { error: null, success: "Magasins mis à jour." };
 }
