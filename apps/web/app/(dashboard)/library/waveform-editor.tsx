@@ -66,6 +66,9 @@ export function WaveformEditor({
   const [saveMsg, setSaveMsg] = useState<string | null>(null);
   const [isPlaying, setIsPlaying] = useState(false);
 
+  const lastFadeInRef = useRef(initialFadeInMs || 1000);
+  const lastFadeOutRef = useRef(initialFadeOutMs || 1000);
+
   const [mixTrackId, setMixTrackId] = useState<string>("");
   const [mixPlaying, setMixPlaying] = useState(false);
   const mixBuffersRef = useRef<Map<string, AudioBuffer>>(new Map());
@@ -229,6 +232,51 @@ export function WaveformEditor({
     setIsPlaying(true);
   }
 
+  function playFrom(atMs: number) {
+    const buffer = bufferRef.current;
+    if (!buffer) return;
+    stopPlayback();
+
+    const ctx = new AudioContext();
+    audioCtxRef.current = ctx;
+    const source = ctx.createBufferSource();
+    source.buffer = buffer;
+    const gain = ctx.createGain();
+    source.connect(gain).connect(ctx.destination);
+
+    const startSec = msToSec(Math.min(Math.max(atMs, trimStart), trimEnd - 50));
+    const endSec = msToSec(trimEnd);
+    const dur = Math.max(0.05, endSec - startSec);
+    const fadeOutSec = Math.min(msToSec(fadeOut), dur);
+
+    const now = ctx.currentTime;
+    gain.gain.setValueAtTime(1, now);
+    gain.gain.setValueAtTime(1, now + Math.max(dur - fadeOutSec, 0));
+    gain.gain.linearRampToValueAtTime(0, now + dur);
+
+    source.start(now, startSec, dur);
+    source.onended = () => setIsPlaying(false);
+    setIsPlaying(true);
+  }
+
+  function toggleFadeIn(enabled: boolean) {
+    if (enabled) {
+      setFadeIn(lastFadeInRef.current || 1000);
+    } else {
+      lastFadeInRef.current = fadeIn || lastFadeInRef.current;
+      setFadeIn(0);
+    }
+  }
+
+  function toggleFadeOut(enabled: boolean) {
+    if (enabled) {
+      setFadeOut(lastFadeOutRef.current || 1000);
+    } else {
+      lastFadeOutRef.current = fadeOut || lastFadeOutRef.current;
+      setFadeOut(0);
+    }
+  }
+
   async function playMix() {
     const buffer = bufferRef.current;
     if (!buffer || !mixTrackId) return;
@@ -332,37 +380,68 @@ export function WaveformEditor({
       {!loading && !error && peaks && (
         <>
           <div ref={containerRef} className="relative overflow-x-auto rounded border border-ink-700">
-            <div className="relative" style={{ width, height: CANVAS_HEIGHT }}>
+            <div
+              className="relative cursor-pointer"
+              style={{ width, height: CANVAS_HEIGHT }}
+              onClick={(e) => {
+                const rect = e.currentTarget.getBoundingClientRect();
+                const ratio = Math.min(1, Math.max(0, (e.clientX - rect.left) / width));
+                playFrom(Math.round(ratio * durationMs));
+              }}
+            >
               <canvas ref={canvasRef} className="block" />
 
               <div
                 className={`${markerStyle} bg-signal`}
                 style={{ left: (trimStart / durationMs) * width }}
-                onPointerDown={() => (dragRef.current = "start")}
+                onPointerDown={(e) => {
+                  e.stopPropagation();
+                  dragRef.current = "start";
+                }}
+                onClick={(e) => e.stopPropagation()}
               />
               <div
                 className={`${markerStyle} bg-signal`}
                 style={{ left: (trimEnd / durationMs) * width }}
-                onPointerDown={() => (dragRef.current = "end")}
+                onPointerDown={(e) => {
+                  e.stopPropagation();
+                  dragRef.current = "end";
+                }}
+                onClick={(e) => e.stopPropagation()}
               />
               <div
                 className={`${markerStyle} bg-ink-400`}
                 style={{ left: ((trimStart + fadeIn) / durationMs) * width }}
-                onPointerDown={() => (dragRef.current = "fadeInEnd")}
+                onPointerDown={(e) => {
+                  e.stopPropagation();
+                  dragRef.current = "fadeInEnd";
+                }}
+                onClick={(e) => e.stopPropagation()}
               />
               <div
                 className={`${markerStyle} bg-ink-400`}
                 style={{ left: ((trimEnd - fadeOut) / durationMs) * width }}
-                onPointerDown={() => (dragRef.current = "fadeOutStart")}
+                onPointerDown={(e) => {
+                  e.stopPropagation();
+                  dragRef.current = "fadeOutStart";
+                }}
+                onClick={(e) => e.stopPropagation()}
               />
             </div>
           </div>
+          <p className="mt-1 text-[10px] text-ink-600">Clique sur la forme d&apos;onde pour écouter à partir de ce point.</p>
 
           <div className="mt-2 flex flex-wrap items-center gap-4 text-[11px] text-ink-500">
             <span>Début : {(trimStart / 1000).toFixed(2)}s</span>
             <span>Fin : {(trimEnd / 1000).toFixed(2)}s</span>
-            <span>Fondu entrée : {(fadeIn / 1000).toFixed(2)}s</span>
-            <span>Fondu sortie : {(fadeOut / 1000).toFixed(2)}s</span>
+            <label className="flex items-center gap-1.5">
+              <input type="checkbox" checked={fadeIn > 0} onChange={(e) => toggleFadeIn(e.target.checked)} />
+              Fondu entrée {fadeIn > 0 ? `(${(fadeIn / 1000).toFixed(2)}s)` : "désactivé"}
+            </label>
+            <label className="flex items-center gap-1.5">
+              <input type="checkbox" checked={fadeOut > 0} onChange={(e) => toggleFadeOut(e.target.checked)} />
+              Fondu sortie {fadeOut > 0 ? `(${(fadeOut / 1000).toFixed(2)}s)` : "désactivé"}
+            </label>
           </div>
 
           <div className="mt-3 flex flex-wrap items-center gap-2">

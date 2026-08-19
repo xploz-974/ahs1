@@ -7,9 +7,11 @@ export interface PeakData {
   durationSec: number;
 }
 
-// Nombre de colonnes de pics calculées sur toute la durée du fichier.
-// Assez fin pour un zoom confortable sans recalcul (~1 pic / 20ms sur 3 min).
-const PEAK_RESOLUTION = 9000;
+// Résolution des pics calquée sur le zoom maximal de l'éditeur (px/sec) avec
+// une marge, pour qu'un pic corresponde toujours à au plus ~1px à l'écran —
+// sinon le zoom "étire" des blocs identiques au lieu d'affiner le tracé.
+const MAX_ZOOM_PX_PER_SEC = 400;
+const PEAKS_PER_SECOND = MAX_ZOOM_PX_PER_SEC * 1.5;
 
 export async function decodeAndExtractPeaks(arrayBuffer: ArrayBuffer): Promise<{ peaks: PeakData; buffer: AudioBuffer }> {
   const AudioContextCtor = window.AudioContext || (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
@@ -18,7 +20,8 @@ export async function decodeAndExtractPeaks(arrayBuffer: ArrayBuffer): Promise<{
   await ctx.close();
 
   const channelData = buffer.getChannelData(0);
-  const samplesPerPeak = Math.max(1, Math.floor(channelData.length / PEAK_RESOLUTION));
+  const targetPeaks = Math.ceil(buffer.duration * PEAKS_PER_SECOND);
+  const samplesPerPeak = Math.max(1, Math.floor(channelData.length / targetPeaks));
   const sampleCount = Math.ceil(channelData.length / samplesPerPeak);
 
   const min = new Float32Array(sampleCount);
