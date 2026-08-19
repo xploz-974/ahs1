@@ -1,4 +1,5 @@
 import { createClient } from "@/lib/supabase/server";
+import { getCurrentOrganizationId } from "@/lib/org";
 import { UploadForm } from "./upload-form";
 
 type AudioFileRow = {
@@ -36,6 +37,7 @@ const CATEGORY_LABEL: Record<string, string> = {
 
 export default async function LibraryPage() {
   const supabase = createClient();
+  const organizationId = await getCurrentOrganizationId(supabase);
 
   const { data: files, error } = await supabase
     .from("audio_files")
@@ -53,7 +55,13 @@ export default async function LibraryPage() {
       </p>
 
       <div className="mt-6">
-        <UploadForm />
+        {organizationId ? (
+          <UploadForm organizationId={organizationId} />
+        ) : (
+          <div className="rounded-md border border-status-warning/30 bg-status-warning/10 px-4 py-3 text-sm text-status-warning">
+            Aucune organisation associée à ce compte — impossible d&apos;importer.
+          </div>
+        )}
       </div>
 
       {error && (

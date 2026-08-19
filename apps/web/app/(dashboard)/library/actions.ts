@@ -1,18 +1,12 @@
 "use server";
 
-import { randomUUID } from "crypto";
 import { revalidatePath } from "next/cache";
 import { createClient } from "@/lib/supabase/server";
 import { getCurrentOrganizationId } from "@/lib/org";
-import { detectFormat, parseAudioBuffer, sha256, type AudioFormat } from "@/lib/audio";
+import { parseAudioBuffer, sha256 } from "@/lib/audio";
+import { detectFormat, type AudioFormat } from "@/lib/audio-shared";
 
 export type UploadState = { error: string | null; success: string | null };
-
-const CATEGORY_BUCKET: Record<string, string> = {
-  music: "audio-music",
-  jingle: "audio-jingles",
-  advertisement: "audio-advertisements",
-};
 
 async function findOrCreateArtist(
   supabase: ReturnType<typeof createClient>,
@@ -79,10 +73,19 @@ async function findOrCreateAlbum(
   return created.id;
 }
 
-export async function uploadAudioFile(
-  _prevState: UploadState,
-  formData: FormData
-): Promise<UploadState> {
+export interface FinalizeUploadInput {
+  bucket: string;
+  storagePath: string;
+  category: string;
+  fileName: string;
+  fileSize: number;
+  mimeType: string;
+}
+
+// Le fichier a déjà été envoyé directement du navigateur vers Supabase Storage
+// (voir upload-form.tsx) — on ne reçoit ici que des métadonnées, jamais les
+// octets du fichier, pour rester sous la limite de payload des Server Actions.
+export async function finalizeAudioUpload(input: FinalizeUploadInput): Promise<UploadState> {
   const supabase = createClient();
 
   const organizationId = await getCurrentOrganizationId(supabase);
@@ -90,44 +93,34 @@ export async function uploadAudioFile(
     return { error: "Aucune organisation associée à ce compte.", success: null };
   }
 
-  const file = formData.get("file");
-  const category = String(formData.get("category") ?? "music");
-
-  if (!(file instanceof File) || file.size === 0) {
-    return { error: "Sélectionne un fichier audio.", success: null };
+  if (!input.storagePath.startsWith(`${organizationId}/`)) {
+    return { error: "Chemin de stockage invalide.", success: null };
   }
 
-  const format: AudioFormat | null = detectFormat(file.type, file.name);
+  const format: AudioFormat | null = detectFormat(input.mimeType, input.fileName);
   if (!format) {
     return { error: "Format non supporté (MP3, WAV ou FLAC uniquement).", success: null };
   }
 
-  const bucket = CATEGORY_BUCKET[category];
-  if (!bucket) {
-    return { error: "Catégorie invalide.", success: null };
+  const { data: downloaded, error: downloadError } = await supabase.storage
+    .from(input.bucket)
+    .download(input.storagePath);
+  if (downloadError || !downloaded) {
+    return { error: `Fichier introuvable dans le stockage : ${downloadError?.message ?? ""}`, success: null };
   }
 
-  const buffer = Buffer.from(await file.arrayBuffer());
+  const buffer = Buffer.from(await downloaded.arrayBuffer());
   const checksum = sha256(buffer);
 
   let parsed;
   try {
-    parsed = await parseAudioBuffer(buffer, file.type || `audio/${format}`);
+    parsed = await parseAudioBuffer(buffer, input.mimeType || `audio/${format}`);
   } catch {
+    await supabase.storage.from(input.bucket).remove([input.storagePath]);
     return { error: "Impossible de lire les métadonnées de ce fichier audio.", success: null };
   }
 
-  const storagePath = `${organizationId}/${randomUUID()}-${file.name}`;
-
-  const { error: uploadError } = await supabase.storage.from(bucket).upload(storagePath, buffer, {
-    contentType: file.type || `audio/${format}`,
-    upsert: false,
-  });
-  if (uploadError) {
-    return { error: `Échec de l'upload : ${uploadError.message}`, success: null };
-  }
-
-  const title = parsed.title ?? file.name.replace(/\.[^.]+$/, "");
+  const title = parsed.title ?? input.fileName.replace(/\.[^.]+$/, "");
   const artistId = parsed.artist
     ? await findOrCreateArtist(supabase, organizationId, parsed.artist)
     : null;
@@ -146,15 +139,14 @@ export async function uploadAudioFile(
     format,
     bitrate: parsed.bitrate,
     sample_rate: parsed.sampleRate,
-    file_size: file.size,
-    storage_path: storagePath,
+    file_size: input.fileSize,
+    storage_path: input.storagePath,
     checksum,
-    category,
+    category: input.category,
   });
 
   if (insertError) {
-    // Nettoyage : ne pas laisser un fichier orphelin sans entrée DB.
-    await supabase.storage.from(bucket).remove([storagePath]);
+    await supabase.storage.from(input.bucket).remove([input.storagePath]);
     return { error: `Échec de l'enregistrement : ${insertError.message}`, success: null };
   }
 

@@ -1,36 +1,77 @@
 "use client";
 
-import { useRef } from "react";
-import { useFormState, useFormStatus } from "react-dom";
-import { uploadAudioFile, type UploadState } from "./actions";
+import { useRef, useState, useTransition } from "react";
+import { createClient } from "@/lib/supabase/client";
+import { detectFormat, CATEGORY_BUCKET } from "@/lib/audio-shared";
+import { finalizeAudioUpload } from "./actions";
 
-function SubmitButton() {
-  const { pending } = useFormStatus();
-  return (
-    <button
-      type="submit"
-      disabled={pending}
-      className="rounded-md bg-signal px-4 py-2 text-sm font-medium text-ink-950 transition hover:bg-signal-dim disabled:opacity-60"
-    >
-      {pending ? "Import en cours…" : "Importer"}
-    </button>
-  );
-}
-
-export function UploadForm() {
-  const [state, formAction] = useFormState<UploadState, FormData>(uploadAudioFile, {
-    error: null,
-    success: null,
-  });
+export function UploadForm({ organizationId }: { organizationId: string }) {
+  const [error, setError] = useState<string | null>(null);
+  const [success, setSuccess] = useState<string | null>(null);
+  const [isPending, startTransition] = useTransition();
   const formRef = useRef<HTMLFormElement>(null);
+
+  async function handleSubmit(formData: FormData) {
+    setError(null);
+    setSuccess(null);
+
+    const file = formData.get("file");
+    const category = String(formData.get("category") ?? "music");
+
+    if (!(file instanceof File) || file.size === 0) {
+      setError("Sélectionne un fichier audio.");
+      return;
+    }
+
+    const format = detectFormat(file.type, file.name);
+    if (!format) {
+      setError("Format non supporté (MP3, WAV ou FLAC uniquement).");
+      return;
+    }
+
+    const bucket = CATEGORY_BUCKET[category];
+    if (!bucket) {
+      setError("Catégorie invalide.");
+      return;
+    }
+
+    const storagePath = `${organizationId}/${crypto.randomUUID()}-${file.name}`;
+    const supabase = createClient();
+
+    const { error: uploadError } = await supabase.storage.from(bucket).upload(storagePath, file, {
+      contentType: file.type || `audio/${format}`,
+      upsert: false,
+    });
+
+    if (uploadError) {
+      setError(`Échec de l'upload : ${uploadError.message}`);
+      return;
+    }
+
+    startTransition(async () => {
+      const result = await finalizeAudioUpload({
+        bucket,
+        storagePath,
+        category,
+        fileName: file.name,
+        fileSize: file.size,
+        mimeType: file.type || `audio/${format}`,
+      });
+
+      if (result.error) {
+        setError(result.error);
+        await supabase.storage.from(bucket).remove([storagePath]);
+      } else {
+        setSuccess(result.success);
+        formRef.current?.reset();
+      }
+    });
+  }
 
   return (
     <form
       ref={formRef}
-      action={async (formData) => {
-        await formAction(formData);
-        formRef.current?.reset();
-      }}
+      action={handleSubmit}
       className="flex flex-wrap items-end gap-3 rounded-lg border border-ink-700 bg-ink-900 p-4"
     >
       <div>
@@ -63,10 +104,16 @@ export function UploadForm() {
         </select>
       </div>
 
-      <SubmitButton />
+      <button
+        type="submit"
+        disabled={isPending}
+        className="rounded-md bg-signal px-4 py-2 text-sm font-medium text-ink-950 transition hover:bg-signal-dim disabled:opacity-60"
+      >
+        {isPending ? "Import en cours…" : "Importer"}
+      </button>
 
-      {state.error && <p className="text-xs text-status-critical">{state.error}</p>}
-      {state.success && <p className="text-xs text-status-online">{state.success}</p>}
+      {error && <p className="text-xs text-status-critical">{error}</p>}
+      {success && <p className="text-xs text-status-online">{success}</p>}
     </form>
   );
 }
