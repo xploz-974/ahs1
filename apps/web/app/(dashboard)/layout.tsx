@@ -6,7 +6,7 @@ const NAV_ITEMS = [
   { label: "Dashboard", href: "/", enabled: true },
   { label: "Bibliothèque", href: "/library", enabled: true },
   { label: "Playlists", href: "/playlists", enabled: true },
-  { label: "Jingles", href: "/jingles", enabled: false },
+  { label: "Jingles", href: "/jingles", enabled: true },
   { label: "Publicités", href: "/ads", enabled: true },
   { label: "Programmation", href: "/schedule", enabled: false },
   { label: "Magasins", href: "/stores", enabled: false },
