@@ -18,10 +18,22 @@ const HEARTBEAT_INTERVAL_MS = 30_000;
 const SYNC_INTERVAL_MS = 5 * 60_000;
 const STATE_BROADCAST_INTERVAL_MS = 3_000;
 
+const SETUP_PIN = "1990";
+
+interface PendingPlayer {
+  id: string;
+  name: string;
+  storeName: string | null;
+  activationCode: string;
+}
+
 function ActivationForm({ onActivated }: { onActivated: () => void }) {
   const [code, setCode] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
+  const [tapCount, setTapCount] = useState(0);
+  const [pendingPlayers, setPendingPlayers] = useState<PendingPlayer[] | null>(null);
+  const lastTapRef = useRef(0);
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
@@ -33,13 +45,57 @@ function ActivationForm({ onActivated }: { onActivated: () => void }) {
     else onActivated();
   }
 
+  function handleLabelTap() {
+    const now = Date.now();
+    const nextCount = now - lastTapRef.current < 1500 ? tapCount + 1 : 1;
+    lastTapRef.current = now;
+    setTapCount(nextCount);
+
+    if (nextCount >= 3) {
+      setTapCount(0);
+      const entered = prompt("Code technicien (mode installation) :");
+      if (entered !== SETUP_PIN) {
+        if (entered !== null) alert("Code incorrect.");
+        return;
+      }
+      fetch("/api/player/pending-list")
+        .then((r) => r.json())
+        .then((data) => setPendingPlayers(data.players ?? []));
+    }
+  }
+
   return (
     <div className="flex min-h-screen items-center justify-center bg-[#0b0f14] px-6">
       <form onSubmit={handleSubmit} className="w-full max-w-sm text-center">
         <p className="font-mono text-xs uppercase tracking-[0.3em] text-[#3ddbc4]">AHS1</p>
         <h1 className="mt-2 text-xl font-medium text-[#e8ecf1]">Bienvenue sur AHS1</h1>
 
-        <p className="mt-8 text-xs text-[#7c8a9c]">Code d&apos;activation</p>
+        <p onClick={handleLabelTap} className="mt-8 select-none text-xs text-[#7c8a9c]">
+          Code d&apos;activation
+        </p>
+
+        {pendingPlayers && (
+          <div className="mt-2 max-h-48 space-y-1 overflow-y-auto rounded-md border border-[#333d4d] bg-[#171d26] p-2 text-left">
+            {pendingPlayers.length === 0 && (
+              <p className="p-2 text-center text-xs text-[#7c8a9c]">Aucun player disponible.</p>
+            )}
+            {pendingPlayers.map((p) => (
+              <button
+                key={p.id}
+                type="button"
+                onClick={() => {
+                  setCode(p.activationCode);
+                  setPendingPlayers(null);
+                }}
+                className="block w-full rounded px-3 py-2 text-left text-sm text-[#e8ecf1] hover:bg-[#232b37]"
+              >
+                <span className="font-medium">{p.name}</span>
+                {p.storeName && <span className="text-[#7c8a9c]"> — {p.storeName}</span>}
+              </button>
+            ))}
+          </div>
+        )}
+
         <input
           value={code}
           onChange={(e) => setCode(e.target.value.toUpperCase())}
