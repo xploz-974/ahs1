@@ -10,7 +10,7 @@ export async function GET(request: Request) {
   const supabase = createAdminClient();
   const { data, error } = await supabase
     .from("support_messages")
-    .select("id, sender, body, created_at")
+    .select("id, sender, sender_name, body, created_at")
     .eq("store_id", claims.storeId)
     .order("created_at", { ascending: true })
     .limit(200);
@@ -24,7 +24,7 @@ export async function POST(request: Request) {
   if ("error" in auth) return auth.error;
   const { claims } = auth;
 
-  let body: { body?: string };
+  let body: { body?: string; sender_name?: string };
   try {
     body = await request.json();
   } catch {
@@ -39,6 +39,7 @@ export async function POST(request: Request) {
     organization_id: claims.organizationId,
     store_id: claims.storeId,
     sender: "store",
+    sender_name: body.sender_name?.trim() || null,
     body: text,
   });
 

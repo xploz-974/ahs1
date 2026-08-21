@@ -145,8 +145,21 @@ export async function sendHeartbeat(currentTrack: string | null) {
 export interface SupportMessage {
   id: string;
   sender: "store" | "admin";
+  sender_name: string | null;
   body: string;
   created_at: string;
+}
+
+export interface StoreContact {
+  id: string;
+  name: string;
+}
+
+export async function fetchContacts(): Promise<StoreContact[]> {
+  const res = await authorizedFetch("/api/player/contacts");
+  if (!res || !res.ok) return [];
+  const data = await res.json();
+  return data.contacts ?? [];
 }
 
 export async function fetchSupportMessages(): Promise<SupportMessage[]> {
@@ -156,11 +169,11 @@ export async function fetchSupportMessages(): Promise<SupportMessage[]> {
   return data.messages ?? [];
 }
 
-export async function sendSupportMessage(body: string): Promise<boolean> {
+export async function sendSupportMessage(body: string, senderName: string | null): Promise<boolean> {
   const res = await authorizedFetch("/api/player/support", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ body }),
+    body: JSON.stringify({ body, sender_name: senderName }),
   });
   return !!res && res.ok;
 }

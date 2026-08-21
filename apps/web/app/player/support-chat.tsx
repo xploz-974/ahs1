@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { fetchSupportMessages, sendSupportMessage, type SupportMessage } from "./api";
+import { fetchContacts, fetchSupportMessages, sendSupportMessage, type StoreContact, type SupportMessage } from "./api";
 import { matchFaq } from "@/lib/player-faq";
 
 type LocalEntry =
@@ -21,7 +21,13 @@ export function SupportChat({ onClose }: { onClose: () => void }) {
   // Une fois la conversation engagée (première escalade, ou messages déjà
   // existants), on ne redemande plus "Contacter le support" à chaque envoi.
   const [escalated, setEscalated] = useState(false);
+  const [contacts, setContacts] = useState<StoreContact[] | null>(null);
+  const [identity, setIdentity] = useState<string | null>(null);
   const listRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    fetchContacts().then(setContacts);
+  }, []);
 
   useEffect(() => {
     let cancelled = false;
@@ -40,6 +46,10 @@ export function SupportChat({ onClose }: { onClose: () => void }) {
     };
   }, []);
 
+  // Identification obligatoire avant de discuter s'il existe des contacts
+  // déclarés pour ce magasin (max recommandé : 3, gérés depuis le dashboard).
+  const needsIdentity = contacts !== null && contacts.length > 0 && identity === null;
+
   useEffect(() => {
     listRef.current?.scrollTo({ top: listRef.current.scrollHeight });
   }, [local, messages]);
@@ -52,7 +62,7 @@ export function SupportChat({ onClose }: { onClose: () => void }) {
 
     if (escalated) {
       // Conversation déjà en cours avec le support : on envoie directement.
-      await sendSupportMessage(question);
+      await sendSupportMessage(question, identity);
       setMessages(await fetchSupportMessages());
       return;
     }
@@ -72,7 +82,7 @@ export function SupportChat({ onClose }: { onClose: () => void }) {
 
   async function handleEscalate() {
     if (!awaitingEscalation) return;
-    const ok = await sendSupportMessage(awaitingEscalation);
+    const ok = await sendSupportMessage(awaitingEscalation, identity);
     if (ok) {
       setEscalated(true);
       setLocal([]); // la conversation continue désormais via `messages` (serveur)
@@ -93,6 +103,25 @@ export function SupportChat({ onClose }: { onClose: () => void }) {
           </button>
         </div>
 
+        {needsIdentity ? (
+          <div className="flex flex-1 flex-col items-center justify-center gap-3 p-6 text-center">
+            <p className="text-sm text-[#e8ecf1]">Qui es-tu ?</p>
+            <p className="text-xs text-[#7c8a9c]">Choisis ton nom pour commencer la conversation.</p>
+            <div className="mt-2 w-full space-y-2">
+              {contacts!.map((c) => (
+                <button
+                  key={c.id}
+                  type="button"
+                  onClick={() => setIdentity(c.name)}
+                  className="block w-full rounded-md border border-[#333d4d] py-2.5 text-sm text-[#e8ecf1] hover:border-[#3ddbc4]"
+                >
+                  {c.name}
+                </button>
+              ))}
+            </div>
+          </div>
+        ) : (
+        <>
         <div ref={listRef} className="flex-1 space-y-2 overflow-y-auto p-4">
           {local.length === 0 && messages.length === 0 && (
             <p className="text-xs text-[#7c8a9c]">
@@ -111,7 +140,7 @@ export function SupportChat({ onClose }: { onClose: () => void }) {
                 {m.body}
               </div>
               <p className="mt-0.5 text-[10px] text-[#333d4d]">
-                {m.sender === "admin" ? "Technicien" : "Toi"} · {formatDateTime(m.created_at)}
+                {m.sender === "admin" ? "Technicien" : m.sender_name ?? "Toi"} · {formatDateTime(m.created_at)}
               </p>
             </div>
           ))}
@@ -162,6 +191,8 @@ export function SupportChat({ onClose }: { onClose: () => void }) {
             Envoyer
           </button>
         </form>
+        </>
+        )}
       </div>
     </div>
   );

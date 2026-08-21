@@ -2,6 +2,7 @@ import { notFound } from "next/navigation";
 import { createClient } from "@/lib/supabase/server";
 import { RemoteControl } from "./remote-control";
 import { SupportPanel } from "./support-panel";
+import { ActivityPanel } from "./activity-panel";
 
 export default async function PlayerRemotePage({ params }: { params: { id: string } }) {
   const supabase = createClient();
@@ -18,6 +19,7 @@ export default async function PlayerRemotePage({ params }: { params: { id: strin
     <div className="p-8">
       <RemoteControl playerId={player.id} playerName={player.name} />
       <div className="max-w-md">
+        <ActivityPanel storeId={player.store_id} />
         <SupportPanel storeId={player.store_id} />
       </div>
     </div>
