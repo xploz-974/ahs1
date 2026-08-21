@@ -1,0 +1,3 @@
+<resources>
+    <style name="Theme.AHS1Player" parent="android:Theme.Material.NoActionBar" />
+</resources>
