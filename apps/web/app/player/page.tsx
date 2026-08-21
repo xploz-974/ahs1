@@ -12,6 +12,7 @@ import {
   type SyncFile,
 } from "./api";
 import { openPlayerChannel, type PlayerCommand, type PlayerState } from "@/lib/player-realtime";
+import { cacheFile, countCached, getPlayableUrl, pruneCache } from "@/lib/player-cache";
 import { SupportChat } from "./support-chat";
 
 const HEARTBEAT_INTERVAL_MS = 30_000;
@@ -172,12 +173,32 @@ function PlayerScreen({
   const [castAvailable, setCastAvailable] = useState(false);
   const [casting, setCasting] = useState(false);
   const [showSupport, setShowSupport] = useState(false);
+  const [playableUrl, setPlayableUrl] = useState<string | null>(null);
+  const [cachedCount, setCachedCount] = useState(0);
+  const [isOffline, setIsOffline] = useState(false);
   const audioRef = useRef<HTMLAudioElement>(null);
   const reportedRef = useRef(false);
   const channelRef = useRef<ReturnType<typeof openPlayerChannel> | null>(null);
+  const objectUrlRef = useRef<string | null>(null);
 
   useEffect(() => {
     fetchPin().then(setPin);
+  }, []);
+
+  // §27 — la perte réseau ne doit jamais couper la diffusion : on suit l'état
+  // de connexion du navigateur en plus du succès des appels /sync, pour
+  // afficher "hors connexion, lecture depuis le cache" plutôt qu'une erreur.
+  useEffect(() => {
+    function update() {
+      setIsOffline(!navigator.onLine);
+    }
+    update();
+    window.addEventListener("online", update);
+    window.addEventListener("offline", update);
+    return () => {
+      window.removeEventListener("online", update);
+      window.removeEventListener("offline", update);
+    };
   }, []);
 
   const loadSync = useCallback(async () => {
@@ -197,7 +218,62 @@ function PlayerScreen({
     return () => clearInterval(syncInterval);
   }, [loadSync]);
 
+  // Cache local (§25) : télécharge et conserve chaque titre synchronisé pour
+  // qu'il reste jouable hors connexion, purge ce qui n'est plus dans la
+  // playlist. Séquentiel volontairement, pour ne pas saturer la connexion.
+  useEffect(() => {
+    if (queue.length === 0) return;
+    let cancelled = false;
+    (async () => {
+      for (const f of queue) {
+        if (cancelled) return;
+        if (f.url) await cacheFile(f.id, f.url);
+        const c = await countCached(queue.map((q) => q.id));
+        if (!cancelled) setCachedCount(c);
+      }
+      if (!cancelled) await pruneCache(queue.map((f) => f.id));
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [queue]);
+
   const current = queue[index] ?? null;
+
+  // Résout l'URL jouable pour le titre courant : depuis le cache local si
+  // disponible (fonctionne hors connexion), sinon télécharge et met en cache.
+  useEffect(() => {
+    let cancelled = false;
+    if (!current) {
+      setPlayableUrl(null);
+      return;
+    }
+    getPlayableUrl(current.id, current.url).then((url) => {
+      if (cancelled) return;
+      if (objectUrlRef.current) URL.revokeObjectURL(objectUrlRef.current);
+      objectUrlRef.current = url;
+      setPlayableUrl(url);
+    });
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [current?.id]);
+
+  // Si le titre courant n'a pas pu être résolu (hors connexion, jamais mis en
+  // cache), retente régulièrement plutôt que de rester bloqué en silence.
+  useEffect(() => {
+    if (!current || playableUrl) return;
+    const retry = setInterval(() => {
+      getPlayableUrl(current.id, current.url).then((url) => {
+        if (!url) return;
+        if (objectUrlRef.current) URL.revokeObjectURL(objectUrlRef.current);
+        objectUrlRef.current = url;
+        setPlayableUrl(url);
+      });
+    }, 15_000);
+    return () => clearInterval(retry);
+  }, [current, playableUrl]);
 
   useEffect(() => {
     const heartbeatInterval = setInterval(() => {
@@ -218,7 +294,7 @@ function PlayerScreen({
 
   useEffect(() => {
     const audio = audioRef.current;
-    if (!audio || !current) return;
+    if (!audio || !current || !playableUrl) return;
     reportedRef.current = false;
 
     function onLoaded() {
@@ -244,7 +320,8 @@ function PlayerScreen({
       setIsPlaying(false);
     }
     function onError() {
-      // fichier illisible/corrompu (§45) : on passe au suivant plutôt que de bloquer la diffusion
+      // fichier illisible/corrompu (§45), ou blob de cache invalide : on passe
+      // au suivant plutôt que de bloquer la diffusion.
       goToNext();
     }
 
@@ -261,7 +338,7 @@ function PlayerScreen({
       audio.removeEventListener("error", onError);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [current, goToNext]);
+  }, [current, playableUrl, goToNext]);
 
   // Remote Playback (Chromecast) — Bluetooth n'a besoin d'aucun code, géré par
   // Android/Chrome au niveau système.
@@ -359,7 +436,7 @@ function PlayerScreen({
 
   return (
     <div className="mx-auto flex min-h-screen max-w-md flex-col bg-[#0b0f14] p-6 text-[#e8ecf1] sm:max-w-lg sm:p-8">
-      {current && <audio ref={audioRef} src={current.url ?? undefined} />}
+      {current && playableUrl && <audio ref={audioRef} src={playableUrl} />}
 
       <div className="flex items-center justify-between">
         <p className="font-mono text-xs uppercase tracking-[0.3em] text-[#3ddbc4]">AHS1</p>
@@ -418,7 +495,9 @@ function PlayerScreen({
         </div>
       </div>
 
-      <p className="mt-1 text-xs text-[#7c8a9c]">{connected ? "🟢 CONNECTÉ" : "🟠 HORS CONNEXION"}</p>
+      <p className="mt-1 text-xs text-[#7c8a9c]">
+        {isOffline ? "🟠 HORS CONNEXION — lecture depuis le cache" : connected ? "🟢 CONNECTÉ" : "🟡 SYNCHRONISATION…"}
+      </p>
 
       <p className="mt-8 text-[11px] uppercase tracking-wide text-[#7c8a9c]">Magasin</p>
       <p className="text-base text-[#e8ecf1]">{session.storeName ?? "—"}</p>
@@ -427,7 +506,11 @@ function PlayerScreen({
         <p className="text-[11px] uppercase tracking-wide text-[#7c8a9c]">En lecture</p>
         <p className="mt-1 max-w-md truncate text-2xl font-medium">{current?.title ?? "En attente de contenu…"}</p>
 
-        {current && (
+        {current && !playableUrl && (
+          <p className="mt-2 text-xs text-[#f5a623]">En attente de connexion pour télécharger ce titre…</p>
+        )}
+
+        {current && playableUrl && (
           <p className="mt-2 font-mono text-xs text-[#7c8a9c]">
             {formatTime(currentTime)} / {formatTime(durationSec)}
           </p>
@@ -477,7 +560,10 @@ function PlayerScreen({
         <p className="text-[11px] uppercase tracking-wide text-[#7c8a9c]">Prochain titre</p>
         <p className="mt-1 truncate text-sm text-[#e8ecf1]">{next?.title ?? "—"}</p>
         <p className="mt-3 text-[11px] text-[#333d4d]">
-          Cache : {queue.length > 0 ? `🟢 ${queue.length} titre(s) synchronisés` : "🟠 aucun contenu"}
+          Cache :{" "}
+          {queue.length > 0
+            ? `${cachedCount === queue.length ? "🟢" : "🟡"} ${cachedCount}/${queue.length} titre(s) en cache local`
+            : "🟠 aucun contenu"}
         </p>
       </div>
 
