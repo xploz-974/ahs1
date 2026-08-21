@@ -11,7 +11,9 @@ import { openPlayerChannel, type PlayerState } from "@/lib/player-realtime";
 export function RemoteControl({ playerId, playerName }: { playerId: string; playerName: string }) {
   const [state, setState] = useState<PlayerState | null>(null);
   const [lastUpdate, setLastUpdate] = useState<number | null>(null);
+  const [pendingPlaying, setPendingPlaying] = useState<boolean | null>(null);
   const channelRef = useRef<ReturnType<typeof openPlayerChannel> | null>(null);
+  const pendingTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => {
     const channel = openPlayerChannel(playerId);
@@ -19,6 +21,8 @@ export function RemoteControl({ playerId, playerName }: { playerId: string; play
     channel.on("broadcast", { event: "state" }, ({ payload }: { payload: PlayerState }) => {
       setState(payload);
       setLastUpdate(Date.now());
+      // Confirmation reçue du player : l'affichage optimiste n'est plus nécessaire.
+      setPendingPlaying((prev) => (prev === payload.isPlaying ? null : prev));
     });
     channel.subscribe();
     return () => {
@@ -37,6 +41,18 @@ export function RemoteControl({ playerId, playerName }: { playerId: string; play
   function send(command: Parameters<NonNullable<typeof channelRef.current>["send"]>[0]["payload"]) {
     channelRef.current?.send({ type: "broadcast", event: "command", payload: command });
   }
+
+  function togglePlay() {
+    if (!state) return;
+    const next = !(pendingPlaying ?? state.isPlaying);
+    setPendingPlaying(next);
+    send(next ? { type: "play" } : { type: "pause" });
+
+    if (pendingTimeoutRef.current) clearTimeout(pendingTimeoutRef.current);
+    pendingTimeoutRef.current = setTimeout(() => setPendingPlaying(null), 6000);
+  }
+
+  const displayIsPlaying = state ? pendingPlaying ?? state.isPlaying : false;
 
   return (
     <div className="max-w-md">
@@ -58,15 +74,19 @@ export function RemoteControl({ playerId, playerName }: { playerId: string; play
 
             <p className="mt-3 text-[11px] uppercase tracking-wide text-ink-400">En lecture</p>
             <p className="text-base font-medium text-ink-100">{state.currentTitle ?? "—"}</p>
-            <p className="text-xs text-ink-500">{state.isPlaying ? "▶ Lecture" : "⏸ En pause"} · mode {state.mode === "technician" ? "technicien" : "verrouillé"}</p>
+            <p className="text-xs text-ink-500">
+              {displayIsPlaying ? "▶ Lecture" : "⏸ En pause"}
+              {pendingPlaying !== null && <span className="ml-1 text-ink-600">(en cours…)</span>} · mode{" "}
+              {state.mode === "technician" ? "technicien" : "verrouillé"}
+            </p>
 
             <div className="mt-4 flex items-center gap-3">
               <button
                 type="button"
-                onClick={() => send(state.isPlaying ? { type: "pause" } : { type: "play" })}
+                onClick={togglePlay}
                 className="flex h-12 w-12 items-center justify-center rounded-full bg-signal text-xl text-ink-950"
               >
-                {state.isPlaying ? "⏸" : "▶"}
+                {displayIsPlaying ? "⏸" : "▶"}
               </button>
               <button
                 type="button"

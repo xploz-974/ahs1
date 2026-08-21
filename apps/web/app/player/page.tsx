@@ -259,23 +259,32 @@ function PlayerScreen({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [session.playerId]);
 
-  useEffect(() => {
-    const interval = setInterval(() => {
-      const state: PlayerState = {
-        connected,
-        isPlaying,
-        currentTitle: current?.title ?? null,
-        currentArtist: null,
-        volume,
-        mode,
-        queue: queue.slice(index, index + 8).map((f) => f.title),
-        storeName: session.storeName,
-        scheduleLabel: queue.length > 0 ? `${queue.length} titre(s) synchronisés` : null,
-      };
-      channelRef.current?.send({ type: "broadcast", event: "state", payload: state });
-    }, STATE_BROADCAST_INTERVAL_MS);
-    return () => clearInterval(interval);
+  const broadcastState = useCallback(() => {
+    const state: PlayerState = {
+      connected,
+      isPlaying,
+      currentTitle: current?.title ?? null,
+      currentArtist: null,
+      volume,
+      mode,
+      queue: queue.slice(index, index + 8).map((f) => f.title),
+      storeName: session.storeName,
+      scheduleLabel: queue.length > 0 ? `${queue.length} titre(s) synchronisés` : null,
+    };
+    channelRef.current?.send({ type: "broadcast", event: "state", payload: state });
   }, [connected, isPlaying, current, volume, mode, queue, index, session.storeName]);
+
+  // Diffuse l'état immédiatement à chaque changement (pas de délai perceptible
+  // sur la télécommande), plus un rappel périodique pour qu'une télécommande
+  // qui vient de se connecter reçoive l'état sans attendre le prochain changement.
+  useEffect(() => {
+    broadcastState();
+  }, [broadcastState]);
+
+  useEffect(() => {
+    const interval = setInterval(broadcastState, STATE_BROADCAST_INTERVAL_MS);
+    return () => clearInterval(interval);
+  }, [broadcastState]);
 
   function requestTechnicianMode() {
     const entered = prompt("Code technicien :");

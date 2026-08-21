@@ -18,13 +18,19 @@ export function SupportChat({ onClose }: { onClose: () => void }) {
   const [local, setLocal] = useState<LocalEntry[]>([]);
   const [messages, setMessages] = useState<SupportMessage[]>([]);
   const [awaitingEscalation, setAwaitingEscalation] = useState<string | null>(null);
+  // Une fois la conversation engagée (première escalade, ou messages déjà
+  // existants), on ne redemande plus "Contacter le support" à chaque envoi.
+  const [escalated, setEscalated] = useState(false);
   const listRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     let cancelled = false;
     async function poll() {
       const msgs = await fetchSupportMessages();
-      if (!cancelled) setMessages(msgs);
+      if (!cancelled) {
+        setMessages(msgs);
+        if (msgs.length > 0) setEscalated(true);
+      }
     }
     poll();
     const interval = setInterval(poll, 5000);
@@ -38,11 +44,18 @@ export function SupportChat({ onClose }: { onClose: () => void }) {
     listRef.current?.scrollTo({ top: listRef.current.scrollHeight });
   }, [local, messages]);
 
-  function handleAsk(e: React.FormEvent) {
+  async function handleAsk(e: React.FormEvent) {
     e.preventDefault();
     const question = input.trim();
     if (!question) return;
     setInput("");
+
+    if (escalated) {
+      // Conversation déjà en cours avec le support : on envoie directement.
+      await sendSupportMessage(question);
+      setMessages(await fetchSupportMessages());
+      return;
+    }
 
     const answer = matchFaq(question);
     if (answer) {
@@ -60,16 +73,13 @@ export function SupportChat({ onClose }: { onClose: () => void }) {
   async function handleEscalate() {
     if (!awaitingEscalation) return;
     const ok = await sendSupportMessage(awaitingEscalation);
-    setLocal((prev) => [
-      ...prev,
-      {
-        kind: "local-answer",
-        text: ok
-          ? "Message transmis au support — retrouve la conversation ici, un technicien va répondre."
-          : "Échec de l'envoi, réessaie.",
-        at: Date.now(),
-      },
-    ]);
+    if (ok) {
+      setEscalated(true);
+      setLocal([]); // la conversation continue désormais via `messages` (serveur)
+      setMessages(await fetchSupportMessages());
+    } else {
+      setLocal((prev) => [...prev, { kind: "local-answer", text: "Échec de l'envoi, réessaie.", at: Date.now() }]);
+    }
     setAwaitingEscalation(null);
   }
 
