@@ -14,7 +14,7 @@ const NAV_ITEMS = [
   { label: "Support", href: "/support", enabled: true },
   { label: "Statistiques", href: "/stats", enabled: false },
   { label: "Historique", href: "/history", enabled: false },
-  { label: "Alertes", href: "/alerts", enabled: false },
+  { label: "Alertes", href: "/alerts", enabled: true },
   { label: "Paramètres", href: "/settings", enabled: false },
 ];
 

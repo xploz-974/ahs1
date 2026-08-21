@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { useState, useTransition } from "react";
 import { deletePlayer, regeneratePlayerCode, updatePlayerPin } from "./actions";
+import { computeLiveStatus, STATUS_LABEL } from "@/lib/player-status";
 
 export type PlayerRow = {
   id: string;
@@ -21,7 +22,6 @@ const STATUS_STYLE: Record<string, string> = {
   ONLINE: "text-status-online",
   OFFLINE_BUT_PLAYING: "text-status-warning",
   OFFLINE_CRITICAL: "text-status-critical",
-  SYNCING: "text-signal",
   ERROR: "text-status-critical",
   PENDING: "text-ink-500",
 };
@@ -83,7 +83,13 @@ function PinCell({ playerId, initialPin }: { playerId: string; initialPin: strin
   );
 }
 
-export function PlayersTable({ players }: { players: PlayerRow[] }) {
+export function PlayersTable({
+  players,
+  lastCacheStatusByPlayer,
+}: {
+  players: PlayerRow[];
+  lastCacheStatusByPlayer?: Record<string, string | null>;
+}) {
   const [pending, startAction] = useTransition();
 
   return (
@@ -110,13 +116,19 @@ export function PlayersTable({ players }: { players: PlayerRow[] }) {
               </td>
             </tr>
           )}
-          {players.map((p) => (
+          {players.map((p) => {
+            const live = computeLiveStatus({
+              status: p.status,
+              lastSeen: p.last_seen,
+              lastCacheStatus: lastCacheStatusByPlayer?.[p.id] ?? null,
+            });
+            return (
             <tr key={p.id}>
               <td className="px-4 py-3 text-ink-100">{p.name}</td>
               <td className="px-4 py-3 text-ink-300">{p.stores?.name ?? "—"}</td>
               <td className="px-4 py-3 text-xs text-ink-400">{p.type}</td>
-              <td className={`px-4 py-3 text-xs font-medium ${STATUS_STYLE[p.status] ?? "text-ink-400"}`}>
-                {p.status}
+              <td className={`px-4 py-3 text-xs font-medium ${STATUS_STYLE[live] ?? "text-ink-400"}`}>
+                {STATUS_LABEL[live] ?? live}
               </td>
               <td className="px-4 py-3 font-mono text-xs text-ink-300">
                 {p.status === "PENDING" ? p.activation_code : "—"}
@@ -159,7 +171,8 @@ export function PlayersTable({ players }: { players: PlayerRow[] }) {
                 </div>
               </td>
             </tr>
-          ))}
+            );
+          })}
         </tbody>
       </table>
     </div>

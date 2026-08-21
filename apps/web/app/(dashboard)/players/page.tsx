@@ -15,6 +15,16 @@ export default async function PlayersPage() {
     .order("created_at", { ascending: false })
     .returns<PlayerRow[]>();
 
+  const { data: heartbeats } = await supabase
+    .from("player_heartbeats")
+    .select("player_id, cache_status, received_at")
+    .order("received_at", { ascending: false });
+
+  const lastCacheStatusByPlayer = new Map<string, string | null>();
+  for (const h of heartbeats ?? []) {
+    if (!lastCacheStatusByPlayer.has(h.player_id)) lastCacheStatusByPlayer.set(h.player_id, h.cache_status);
+  }
+
   return (
     <div className="p-8">
       <h1 className="text-lg font-medium text-ink-100">Players</h1>
@@ -33,7 +43,12 @@ export default async function PlayersPage() {
         </div>
       )}
 
-      {!error && <PlayersTable players={players ?? []} />}
+      {!error && (
+        <PlayersTable
+          players={players ?? []}
+          lastCacheStatusByPlayer={Object.fromEntries(lastCacheStatusByPlayer)}
+        />
+      )}
     </div>
   );
 }
