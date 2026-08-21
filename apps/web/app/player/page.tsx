@@ -11,9 +11,11 @@ import {
   sendPlaybackEvent,
   type SyncFile,
 } from "./api";
+import { openPlayerChannel, type PlayerCommand, type PlayerState } from "@/lib/player-realtime";
 
 const HEARTBEAT_INTERVAL_MS = 30_000;
 const SYNC_INTERVAL_MS = 5 * 60_000;
+const STATE_BROADCAST_INTERVAL_MS = 3_000;
 
 function ActivationForm({ onActivated }: { onActivated: () => void }) {
   const [code, setCode] = useState("");
@@ -66,17 +68,55 @@ function formatTime(sec: number): string {
   return `${m}:${s.toString().padStart(2, "0")}`;
 }
 
-function PlayerScreen({ session, onDeactivated }: { session: NonNullable<ReturnType<typeof getStoredSession>>; onDeactivated: () => void }) {
+function VolumeControl({ volume, onChange }: { volume: number; onChange: (v: number) => void }) {
+  const [open, setOpen] = useState(false);
+
+  return (
+    <div className="relative flex flex-col items-center">
+      {open && (
+        <input
+          type="range"
+          min={0}
+          max={1}
+          step={0.01}
+          value={volume}
+          onChange={(e) => onChange(Number(e.target.value))}
+          className="mb-6 h-40 w-3 accent-[#3ddbc4]"
+          style={{ writingMode: "vertical-lr" as const, direction: "rtl" }}
+        />
+      )}
+      <button
+        type="button"
+        onClick={() => setOpen((v) => !v)}
+        className="flex h-32 w-32 flex-col items-center justify-center rounded-full border-2 border-[#232b37] bg-[#171d26] text-[#e8ecf1] transition active:scale-95"
+      >
+        <span className="text-3xl">{volume === 0 ? "🔇" : volume < 0.5 ? "🔉" : "🔊"}</span>
+        <span className="mt-1 font-mono text-sm text-[#7c8a9c]">{Math.round(volume * 100)}%</span>
+      </button>
+    </div>
+  );
+}
+
+function PlayerScreen({
+  session,
+  onDeactivated,
+}: {
+  session: NonNullable<ReturnType<typeof getStoredSession>>;
+  onDeactivated: () => void;
+}) {
   const [queue, setQueue] = useState<SyncFile[]>([]);
   const [index, setIndex] = useState(0);
   const [isPlaying, setIsPlaying] = useState(false);
   const [connected, setConnected] = useState(false);
   const [currentTime, setCurrentTime] = useState(0);
   const [pin, setPin] = useState("1990");
+  const [mode, setMode] = useState<"locked" | "technician">("locked");
+  const [volume, setVolume] = useState(1);
   const [castAvailable, setCastAvailable] = useState(false);
   const [casting, setCasting] = useState(false);
   const audioRef = useRef<HTMLAudioElement>(null);
   const reportedRef = useRef(false);
+  const channelRef = useRef<ReturnType<typeof openPlayerChannel> | null>(null);
 
   useEffect(() => {
     fetchPin().then(setPin);
@@ -111,6 +151,14 @@ function PlayerScreen({ session, onDeactivated }: { session: NonNullable<ReturnT
   }, [current?.id]);
 
   useEffect(() => {
+    if (audioRef.current) audioRef.current.volume = volume;
+  }, [volume]);
+
+  const goToNext = useCallback(() => {
+    setIndex((i) => (queue.length > 0 ? (i + 1) % queue.length : 0));
+  }, [queue.length]);
+
+  useEffect(() => {
     const audio = audioRef.current;
     if (!audio || !current) return;
     reportedRef.current = false;
@@ -118,6 +166,7 @@ function PlayerScreen({ session, onDeactivated }: { session: NonNullable<ReturnT
     function onLoaded() {
       if (!audio || !current) return;
       audio.currentTime = current.trim_start_ms / 1000;
+      audio.volume = volume;
       audio.play().catch(() => setIsPlaying(false));
     }
     function onTimeUpdate() {
@@ -128,9 +177,7 @@ function PlayerScreen({ session, onDeactivated }: { session: NonNullable<ReturnT
         reportedRef.current = true;
         sendPlaybackEvent(current);
       }
-      if (audio.currentTime >= endSec) {
-        setIndex((i) => (i + 1) % queue.length);
-      }
+      if (audio.currentTime >= endSec) goToNext();
     }
     function onPlay() {
       setIsPlaying(true);
@@ -140,7 +187,7 @@ function PlayerScreen({ session, onDeactivated }: { session: NonNullable<ReturnT
     }
     function onError() {
       // fichier illisible/corrompu (§45) : on passe au suivant plutôt que de bloquer la diffusion
-      setIndex((i) => (i + 1) % queue.length);
+      goToNext();
     }
 
     audio.addEventListener("loadedmetadata", onLoaded);
@@ -155,24 +202,18 @@ function PlayerScreen({ session, onDeactivated }: { session: NonNullable<ReturnT
       audio.removeEventListener("pause", onPause);
       audio.removeEventListener("error", onError);
     };
-  }, [current, queue.length]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [current, goToNext]);
 
-  // API Remote Playback (native Chrome) : propose "Caster" vers un
-  // Chromecast/enceinte compatible dès qu'un tel appareil est détectable sur
-  // le réseau. Bluetooth n'a besoin d'aucun code : Android route l'audio de
-  // n'importe quelle appli vers l'enceinte appairée au niveau système.
+  // Remote Playback (Chromecast) — Bluetooth n'a besoin d'aucun code, géré par
+  // Android/Chrome au niveau système.
   useEffect(() => {
     const audio = audioRef.current as (HTMLAudioElement & { remote?: any }) | null;
     if (!audio?.remote) return;
-
-    audio.remote
-      .watchAvailability((available: boolean) => setCastAvailable(available))
-      .catch(() => setCastAvailable(false));
-
+    audio.remote.watchAvailability((available: boolean) => setCastAvailable(available)).catch(() => setCastAvailable(false));
     const onConnecting = () => setCasting(true);
     const onConnect = () => setCasting(true);
     const onDisconnect = () => setCasting(false);
-
     audio.remote.addEventListener("connecting", onConnecting);
     audio.remote.addEventListener("connect", onConnect);
     audio.remote.addEventListener("disconnect", onDisconnect);
@@ -189,15 +230,68 @@ function PlayerScreen({ session, onDeactivated }: { session: NonNullable<ReturnT
     try {
       await audio.remote.prompt();
     } catch {
-      // utilisateur a fermé la fenêtre de sélection, ou aucun appareil dispo
+      // annulé par l'utilisateur ou aucun appareil disponible
     }
   }
 
+  // Télécommande temps réel depuis le dashboard (§ contrôle à distance) :
+  // diffuse l'état toutes les 3s, applique les commandes reçues immédiatement.
+  useEffect(() => {
+    if (!session.playerId) return;
+    const channel = openPlayerChannel(session.playerId);
+    channelRef.current = channel;
+
+    channel.on("broadcast", { event: "command" }, ({ payload }: { payload: PlayerCommand }) => {
+      const audio = audioRef.current;
+      if (!audio) return;
+      if (payload.type === "play") audio.play().catch(() => {});
+      else if (payload.type === "pause") audio.pause();
+      else if (payload.type === "next") goToNext();
+      else if (payload.type === "set_volume") setVolume(Math.min(1, Math.max(0, payload.value)));
+    });
+
+    channel.subscribe();
+    return () => {
+      channel.unsubscribe();
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [session.playerId]);
+
+  useEffect(() => {
+    const interval = setInterval(() => {
+      const state: PlayerState = {
+        connected,
+        isPlaying,
+        currentTitle: current?.title ?? null,
+        currentArtist: null,
+        volume,
+        mode,
+        queue: queue.slice(index, index + 8).map((f) => f.title),
+        storeName: session.storeName,
+        scheduleLabel: queue.length > 0 ? `${queue.length} titre(s) synchronisés` : null,
+      };
+      channelRef.current?.send({ type: "broadcast", event: "state", payload: state });
+    }, STATE_BROADCAST_INTERVAL_MS);
+    return () => clearInterval(interval);
+  }, [connected, isPlaying, current, volume, mode, queue, index, session.storeName]);
+
+  function requestTechnicianMode() {
+    const entered = prompt("Code technicien :");
+    if (entered === null) return;
+    if (entered !== pin) {
+      alert("Code incorrect.");
+      return;
+    }
+    setMode("technician");
+  }
+
   const next = queue[(index + 1) % queue.length] ?? null;
-  const durationSec = current ? (current.trim_end_ms != null ? current.trim_end_ms - current.trim_start_ms : current.duration_ms) / 1000 : 0;
+  const durationSec = current
+    ? (current.trim_end_ms != null ? current.trim_end_ms - current.trim_start_ms : current.duration_ms) / 1000
+    : 0;
 
   return (
-    <div className="flex min-h-screen flex-col bg-[#0b0f14] p-8 text-[#e8ecf1]">
+    <div className="mx-auto flex min-h-screen max-w-md flex-col bg-[#0b0f14] p-6 text-[#e8ecf1] sm:max-w-lg sm:p-8">
       {current && <audio ref={audioRef} src={current.url ?? undefined} />}
 
       <div className="flex items-center justify-between">
@@ -213,24 +307,39 @@ function PlayerScreen({ session, onDeactivated }: { session: NonNullable<ReturnT
               📡
             </button>
           )}
-        <button
-          type="button"
-          onClick={() => {
-            const entered = prompt("Code PIN requis pour accéder aux réglages :");
-            if (entered === null) return;
-            if (entered !== pin) {
-              alert("Code incorrect.");
-              return;
-            }
-            if (confirm("Désactiver ce player ?")) {
-              clearSession();
-              onDeactivated();
-            }
-          }}
-          className="text-[10px] text-[#333d4d] hover:text-[#7c8a9c]"
-        >
-          ⚙
-        </button>
+          {mode === "technician" ? (
+            <button
+              type="button"
+              onClick={() => setMode("locked")}
+              className="rounded-full border border-[#333d4d] px-3 py-1 text-[10px] uppercase tracking-wide text-[#3ddbc4]"
+            >
+              🔓 Technicien
+            </button>
+          ) : (
+            <button
+              type="button"
+              onClick={requestTechnicianMode}
+              className="text-[10px] text-[#333d4d] hover:text-[#7c8a9c]"
+              title="Mode technicien"
+            >
+              🔒
+            </button>
+          )}
+          {mode === "technician" && (
+            <button
+              type="button"
+              onClick={() => {
+                if (confirm("Désactiver ce player ?")) {
+                  clearSession();
+                  onDeactivated();
+                }
+              }}
+              className="text-[10px] text-[#333d4d] hover:text-[#ef5b5b]"
+              title="Désactiver le player"
+            >
+              ⚙
+            </button>
+          )}
         </div>
       </div>
 
@@ -239,10 +348,8 @@ function PlayerScreen({ session, onDeactivated }: { session: NonNullable<ReturnT
       <p className="mt-8 text-[11px] uppercase tracking-wide text-[#7c8a9c]">Magasin</p>
       <p className="text-base text-[#e8ecf1]">{session.storeName ?? "—"}</p>
 
-      <div className="mt-10 flex flex-1 flex-col items-center justify-center text-center">
-        <div className="flex h-40 w-40 items-center justify-center rounded-xl bg-[#171d26] text-5xl">🎵</div>
-
-        <p className="mt-8 text-[11px] uppercase tracking-wide text-[#7c8a9c]">En lecture</p>
+      <div className="mt-8 flex flex-1 flex-col items-center justify-center text-center">
+        <p className="text-[11px] uppercase tracking-wide text-[#7c8a9c]">En lecture</p>
         <p className="mt-1 max-w-md truncate text-2xl font-medium">{current?.title ?? "En attente de contenu…"}</p>
 
         {current && (
@@ -251,12 +358,49 @@ function PlayerScreen({ session, onDeactivated }: { session: NonNullable<ReturnT
           </p>
         )}
 
-        <p className="mt-1 text-xs text-[#333d4d]">{isPlaying ? "▶ Lecture" : "⏸ En pause"}</p>
+        <div className="my-8">
+          <VolumeControl volume={volume} onChange={setVolume} />
+        </div>
+
+        {mode === "technician" && (
+          <div className="flex items-center gap-4">
+            <button
+              type="button"
+              onClick={() => (isPlaying ? audioRef.current?.pause() : audioRef.current?.play())}
+              className="flex h-14 w-14 items-center justify-center rounded-full bg-[#3ddbc4] text-2xl text-[#0b0f14]"
+            >
+              {isPlaying ? "⏸" : "▶"}
+            </button>
+            <button
+              type="button"
+              onClick={goToNext}
+              className="flex h-14 w-14 items-center justify-center rounded-full border border-[#333d4d] text-xl text-[#e8ecf1]"
+            >
+              ⏭
+            </button>
+          </div>
+        )}
       </div>
+
+      {mode === "technician" && queue.length > 0 && (
+        <div className="mb-4 max-h-40 overflow-y-auto rounded-md border border-[#232b37] p-3">
+          <p className="mb-2 text-[11px] uppercase tracking-wide text-[#7c8a9c]">File de lecture</p>
+          <ol className="space-y-1">
+            {queue.map((f, i) => (
+              <li
+                key={f.id}
+                className={`truncate text-xs ${i === index ? "font-medium text-[#3ddbc4]" : "text-[#7c8a9c]"}`}
+              >
+                {i + 1}. {f.title}
+              </li>
+            ))}
+          </ol>
+        </div>
+      )}
 
       <div className="border-t border-[#232b37] pt-4">
         <p className="text-[11px] uppercase tracking-wide text-[#7c8a9c]">Prochain titre</p>
-        <p className="mt-1 text-sm text-[#e8ecf1]">{next?.title ?? "—"}</p>
+        <p className="mt-1 truncate text-sm text-[#e8ecf1]">{next?.title ?? "—"}</p>
         <p className="mt-3 text-[11px] text-[#333d4d]">
           Cache : {queue.length > 0 ? `🟢 ${queue.length} titre(s) synchronisés` : "🟠 aucun contenu"}
         </p>

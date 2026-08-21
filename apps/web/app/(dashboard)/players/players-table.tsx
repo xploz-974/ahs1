@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { useState, useTransition } from "react";
 import { deletePlayer, regeneratePlayerCode, updatePlayerPin } from "./actions";
 
@@ -127,6 +128,12 @@ export function PlayersTable({ players }: { players: PlayerRow[] }) {
               <td className="px-4 py-3 font-mono text-xs text-ink-500">{p.app_version ?? "—"}</td>
               <td className="px-4 py-3 text-right">
                 <div className="inline-flex gap-1">
+                  <Link
+                    href={`/players/${p.id}/remote`}
+                    className="rounded-md border border-signal/40 px-2.5 py-1 text-xs text-signal transition hover:bg-signal/10"
+                  >
+                    Contrôler
+                  </Link>
                   <button
                     type="button"
                     disabled={pending}

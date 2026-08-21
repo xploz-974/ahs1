@@ -8,6 +8,7 @@
 const STORAGE_KEYS = {
   access: "ahs1_access_token",
   refresh: "ahs1_refresh_token",
+  playerId: "ahs1_player_id",
   playerName: "ahs1_player_name",
   storeName: "ahs1_store_name",
 } as const;
@@ -45,6 +46,7 @@ export function getStoredSession() {
   return {
     access,
     refresh,
+    playerId: localStorage.getItem(STORAGE_KEYS.playerId),
     playerName: localStorage.getItem(STORAGE_KEYS.playerName),
     storeName: localStorage.getItem(STORAGE_KEYS.storeName),
   };
@@ -71,6 +73,7 @@ export async function enroll(activationCode: string): Promise<{ error: string | 
   }
   localStorage.setItem(STORAGE_KEYS.access, data.access_token);
   localStorage.setItem(STORAGE_KEYS.refresh, data.refresh_token);
+  localStorage.setItem(STORAGE_KEYS.playerId, data.player.id);
   localStorage.setItem(STORAGE_KEYS.playerName, data.player.name);
   if (data.player.store) localStorage.setItem(STORAGE_KEYS.storeName, data.player.store);
   return { error: null };
