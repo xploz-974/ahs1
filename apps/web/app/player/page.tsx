@@ -73,6 +73,8 @@ function PlayerScreen({ session, onDeactivated }: { session: NonNullable<ReturnT
   const [connected, setConnected] = useState(false);
   const [currentTime, setCurrentTime] = useState(0);
   const [pin, setPin] = useState("1990");
+  const [castAvailable, setCastAvailable] = useState(false);
+  const [casting, setCasting] = useState(false);
   const audioRef = useRef<HTMLAudioElement>(null);
   const reportedRef = useRef(false);
 
@@ -155,6 +157,42 @@ function PlayerScreen({ session, onDeactivated }: { session: NonNullable<ReturnT
     };
   }, [current, queue.length]);
 
+  // API Remote Playback (native Chrome) : propose "Caster" vers un
+  // Chromecast/enceinte compatible dès qu'un tel appareil est détectable sur
+  // le réseau. Bluetooth n'a besoin d'aucun code : Android route l'audio de
+  // n'importe quelle appli vers l'enceinte appairée au niveau système.
+  useEffect(() => {
+    const audio = audioRef.current as (HTMLAudioElement & { remote?: any }) | null;
+    if (!audio?.remote) return;
+
+    audio.remote
+      .watchAvailability((available: boolean) => setCastAvailable(available))
+      .catch(() => setCastAvailable(false));
+
+    const onConnecting = () => setCasting(true);
+    const onConnect = () => setCasting(true);
+    const onDisconnect = () => setCasting(false);
+
+    audio.remote.addEventListener("connecting", onConnecting);
+    audio.remote.addEventListener("connect", onConnect);
+    audio.remote.addEventListener("disconnect", onDisconnect);
+    return () => {
+      audio.remote.removeEventListener("connecting", onConnecting);
+      audio.remote.removeEventListener("connect", onConnect);
+      audio.remote.removeEventListener("disconnect", onDisconnect);
+    };
+  }, [current]);
+
+  async function handleCast() {
+    const audio = audioRef.current as (HTMLAudioElement & { remote?: any }) | null;
+    if (!audio?.remote) return;
+    try {
+      await audio.remote.prompt();
+    } catch {
+      // utilisateur a fermé la fenêtre de sélection, ou aucun appareil dispo
+    }
+  }
+
   const next = queue[(index + 1) % queue.length] ?? null;
   const durationSec = current ? (current.trim_end_ms != null ? current.trim_end_ms - current.trim_start_ms : current.duration_ms) / 1000 : 0;
 
@@ -164,6 +202,17 @@ function PlayerScreen({ session, onDeactivated }: { session: NonNullable<ReturnT
 
       <div className="flex items-center justify-between">
         <p className="font-mono text-xs uppercase tracking-[0.3em] text-[#3ddbc4]">AHS1</p>
+        <div className="flex items-center gap-3">
+          {castAvailable && (
+            <button
+              type="button"
+              onClick={handleCast}
+              title={casting ? "Diffusion en cours vers un appareil distant" : "Caster vers un appareil"}
+              className={`text-base ${casting ? "text-[#3ddbc4]" : "text-[#7c8a9c]"} hover:text-[#3ddbc4]`}
+            >
+              📡
+            </button>
+          )}
         <button
           type="button"
           onClick={() => {
@@ -182,6 +231,7 @@ function PlayerScreen({ session, onDeactivated }: { session: NonNullable<ReturnT
         >
           ⚙
         </button>
+        </div>
       </div>
 
       <p className="mt-1 text-xs text-[#7c8a9c]">{connected ? "🟢 CONNECTÉ" : "🟠 HORS CONNEXION"}</p>
