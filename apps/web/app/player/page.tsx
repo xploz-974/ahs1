@@ -12,6 +12,7 @@ import {
   type SyncFile,
 } from "./api";
 import { openPlayerChannel, type PlayerCommand, type PlayerState } from "@/lib/player-realtime";
+import { SupportChat } from "./support-chat";
 
 const HEARTBEAT_INTERVAL_MS = 30_000;
 const SYNC_INTERVAL_MS = 5 * 60_000;
@@ -114,6 +115,7 @@ function PlayerScreen({
   const [volume, setVolume] = useState(1);
   const [castAvailable, setCastAvailable] = useState(false);
   const [casting, setCasting] = useState(false);
+  const [showSupport, setShowSupport] = useState(false);
   const audioRef = useRef<HTMLAudioElement>(null);
   const reportedRef = useRef(false);
   const channelRef = useRef<ReturnType<typeof openPlayerChannel> | null>(null);
@@ -297,6 +299,14 @@ function PlayerScreen({
       <div className="flex items-center justify-between">
         <p className="font-mono text-xs uppercase tracking-[0.3em] text-[#3ddbc4]">AHS1</p>
         <div className="flex items-center gap-3">
+          <button
+            type="button"
+            onClick={() => setShowSupport(true)}
+            title="Assistance"
+            className="text-base text-[#7c8a9c] hover:text-[#3ddbc4]"
+          >
+            🆘
+          </button>
           {castAvailable && (
             <button
               type="button"
@@ -405,6 +415,8 @@ function PlayerScreen({
           Cache : {queue.length > 0 ? `🟢 ${queue.length} titre(s) synchronisés` : "🟠 aucun contenu"}
         </p>
       </div>
+
+      {showSupport && <SupportChat onClose={() => setShowSupport(false)} />}
     </div>
   );
 }

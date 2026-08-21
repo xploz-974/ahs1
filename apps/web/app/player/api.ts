@@ -142,6 +142,29 @@ export async function sendHeartbeat(currentTrack: string | null) {
   });
 }
 
+export interface SupportMessage {
+  id: string;
+  sender: "store" | "admin";
+  body: string;
+  created_at: string;
+}
+
+export async function fetchSupportMessages(): Promise<SupportMessage[]> {
+  const res = await authorizedFetch("/api/player/support");
+  if (!res || !res.ok) return [];
+  const data = await res.json();
+  return data.messages ?? [];
+}
+
+export async function sendSupportMessage(body: string): Promise<boolean> {
+  const res = await authorizedFetch("/api/player/support", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ body }),
+  });
+  return !!res && res.ok;
+}
+
 export async function sendPlaybackEvent(file: SyncFile) {
   await authorizedFetch("/api/player/playback", {
     method: "POST",
