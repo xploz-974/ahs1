@@ -9,7 +9,9 @@ export default async function PlayersPage() {
 
   const { data: players, error } = await supabase
     .from("players")
-    .select("id, name, type, status, activation_code, activation_code_expires_at, last_seen, app_version, stores(name)")
+    .select(
+      "id, name, type, status, activation_code, activation_code_expires_at, last_seen, app_version, configuration, stores(name)"
+    )
     .order("created_at", { ascending: false })
     .returns<PlayerRow[]>();
 

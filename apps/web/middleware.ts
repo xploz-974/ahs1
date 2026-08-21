@@ -6,7 +6,9 @@ export async function middleware(request: NextRequest) {
   // (ex. le runtime Next.js de Netlify) ne le respectent pas toujours —
   // on revérifie explicitement pour ne jamais rediriger un client API vers
   // /login.
-  if (request.nextUrl.pathname.startsWith("/api/")) {
+  // /player n'est pas un compte Supabase Auth (c'est le lecteur lui-même,
+  // authentifié par son propre JWT via localStorage) — jamais de redirect /login.
+  if (request.nextUrl.pathname.startsWith("/api/") || request.nextUrl.pathname.startsWith("/player")) {
     return NextResponse.next();
   }
   return updateSession(request);
@@ -14,6 +16,6 @@ export async function middleware(request: NextRequest) {
 
 export const config = {
   matcher: [
-    "/((?!api/|_next/static|_next/image|favicon.ico|.*\\.(?:svg|png|jpg|jpeg|gif|webp)$).*)",
+    "/((?!api/|player|_next/static|_next/image|favicon.ico|.*\\.(?:svg|png|jpg|jpeg|gif|webp)$).*)",
   ],
 };

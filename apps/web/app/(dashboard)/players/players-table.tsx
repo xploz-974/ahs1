@@ -1,7 +1,7 @@
 "use client";
 
-import { useTransition } from "react";
-import { deletePlayer, regeneratePlayerCode } from "./actions";
+import { useState, useTransition } from "react";
+import { deletePlayer, regeneratePlayerCode, updatePlayerPin } from "./actions";
 
 export type PlayerRow = {
   id: string;
@@ -12,6 +12,7 @@ export type PlayerRow = {
   activation_code_expires_at: string | null;
   last_seen: string | null;
   app_version: string | null;
+  configuration: { pin?: string } | null;
   stores: { name: string } | null;
 };
 
@@ -35,11 +36,57 @@ function timeAgo(iso: string | null): string {
   return `il y a ${Math.floor(hours / 24)} j`;
 }
 
+function PinCell({ playerId, initialPin }: { playerId: string; initialPin: string }) {
+  const [pin, setPin] = useState(initialPin);
+  const [editing, setEditing] = useState(false);
+  const [saving, startSave] = useTransition();
+  const [error, setError] = useState<string | null>(null);
+
+  if (!editing) {
+    return (
+      <button
+        type="button"
+        onClick={() => setEditing(true)}
+        className="rounded border border-ink-700 px-2 py-0.5 font-mono text-xs text-ink-300 transition hover:border-ink-500"
+        title="Cliquer pour modifier"
+      >
+        {pin}
+      </button>
+    );
+  }
+
+  return (
+    <div className="flex items-center gap-1">
+      <input
+        value={pin}
+        onChange={(e) => setPin(e.target.value)}
+        maxLength={8}
+        className="w-20 rounded border border-ink-600 bg-ink-800 px-2 py-1 font-mono text-xs text-ink-100 outline-none focus:border-signal"
+      />
+      <button
+        type="button"
+        disabled={saving}
+        onClick={() =>
+          startSave(async () => {
+            const result = await updatePlayerPin(playerId, pin);
+            if (result.error) setError(result.error);
+            else setEditing(false);
+          })
+        }
+        className="rounded border border-ink-600 px-2 py-1 text-xs text-ink-300 hover:bg-ink-800"
+      >
+        OK
+      </button>
+      {error && <span className="text-[10px] text-status-critical">{error}</span>}
+    </div>
+  );
+}
+
 export function PlayersTable({ players }: { players: PlayerRow[] }) {
   const [pending, startAction] = useTransition();
 
   return (
-    <div className="mt-6 overflow-hidden rounded-lg border border-ink-700">
+    <div className="mt-6 overflow-x-auto rounded-lg border border-ink-700">
       <table className="w-full text-left text-sm">
         <thead className="bg-ink-900 text-xs uppercase tracking-wide text-ink-400">
           <tr>
@@ -48,6 +95,7 @@ export function PlayersTable({ players }: { players: PlayerRow[] }) {
             <th className="px-4 py-3 font-medium">Type</th>
             <th className="px-4 py-3 font-medium">Statut</th>
             <th className="px-4 py-3 font-medium">Code d&apos;activation</th>
+            <th className="px-4 py-3 font-medium">Code PIN</th>
             <th className="px-4 py-3 font-medium">Dernier contact</th>
             <th className="px-4 py-3 font-medium">Version app</th>
             <th className="px-4 py-3 font-medium"></th>
@@ -56,7 +104,7 @@ export function PlayersTable({ players }: { players: PlayerRow[] }) {
         <tbody className="divide-y divide-ink-700 bg-ink-950">
           {players.length === 0 && (
             <tr>
-              <td colSpan={8} className="px-4 py-3 text-sm text-ink-400">
+              <td colSpan={9} className="px-4 py-3 text-sm text-ink-400">
                 Aucun player pour l&apos;instant.
               </td>
             </tr>
@@ -71,6 +119,9 @@ export function PlayersTable({ players }: { players: PlayerRow[] }) {
               </td>
               <td className="px-4 py-3 font-mono text-xs text-ink-300">
                 {p.status === "PENDING" ? p.activation_code : "—"}
+              </td>
+              <td className="px-4 py-3">
+                <PinCell playerId={p.id} initialPin={p.configuration?.pin ?? "1990"} />
               </td>
               <td className="px-4 py-3 text-xs text-ink-400">{timeAgo(p.last_seen)}</td>
               <td className="px-4 py-3 font-mono text-xs text-ink-500">{p.app_version ?? "—"}</td>

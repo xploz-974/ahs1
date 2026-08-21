@@ -42,6 +42,7 @@ export async function createPlayer(_prevState: ActionState, formData: FormData):
     status: "PENDING",
     activation_code: activationCode,
     activation_code_expires_at: expiresAt,
+    configuration: { pin: "1990" },
   });
 
   if (error) {
@@ -73,6 +74,25 @@ export async function regeneratePlayerCode(playerId: string): Promise<ActionStat
 
   revalidatePath("/players");
   return { error: null, success: `Nouveau code : ${activationCode}` };
+}
+
+export async function updatePlayerPin(playerId: string, pin: string): Promise<ActionState> {
+  const supabase = createClient();
+  const trimmed = pin.trim();
+  if (!/^\d{4,8}$/.test(trimmed)) {
+    return { error: "Le code doit contenir entre 4 et 8 chiffres.", success: null };
+  }
+
+  const { data: player } = await supabase.from("players").select("configuration").eq("id", playerId).maybeSingle();
+  const configuration = { ...(player?.configuration as Record<string, unknown> | null), pin: trimmed };
+
+  const { error } = await supabase.from("players").update({ configuration }).eq("id", playerId);
+  if (error) {
+    return { error: `Échec : ${error.message}`, success: null };
+  }
+
+  revalidatePath("/players");
+  return { error: null, success: "Code PIN mis à jour." };
 }
 
 export async function deletePlayer(playerId: string): Promise<void> {
