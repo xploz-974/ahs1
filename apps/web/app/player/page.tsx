@@ -12,7 +12,8 @@ import {
   type SyncFile,
 } from "./api";
 import { openPlayerChannel, type PlayerCommand, type PlayerState } from "@/lib/player-realtime";
-import { cacheFile, countCached, getPlayableUrl, pruneCache } from "@/lib/player-cache";
+import { cacheFile, countCached, getAudioArrayBuffer, pruneCache } from "@/lib/player-cache";
+import { PlaybackEngine, type EngineTrack } from "@/lib/player-audio-engine";
 import { SupportChat } from "./support-chat";
 
 const HEARTBEAT_INTERVAL_MS = 30_000;
@@ -173,13 +174,23 @@ function PlayerScreen({
   const [castAvailable, setCastAvailable] = useState(false);
   const [casting, setCasting] = useState(false);
   const [showSupport, setShowSupport] = useState(false);
-  const [playableUrl, setPlayableUrl] = useState<string | null>(null);
   const [cachedCount, setCachedCount] = useState(0);
   const [isOffline, setIsOffline] = useState(false);
-  const audioRef = useRef<HTMLAudioElement>(null);
-  const reportedRef = useRef(false);
+  const [trackReady, setTrackReady] = useState(false);
+
+  const castAudioRef = useRef<HTMLAudioElement>(null);
   const channelRef = useRef<ReturnType<typeof openPlayerChannel> | null>(null);
-  const objectUrlRef = useRef<string | null>(null);
+  const engineRef = useRef<PlaybackEngine | null>(null);
+  const queueRef = useRef<SyncFile[]>([]);
+  const bufferCacheRef = useRef<Map<string, AudioBuffer>>(new Map());
+  const scheduleTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const activeIdxRef = useRef(0);
+  const trackStartRef = useRef(0);
+  const trimStartSecRef = useRef(0);
+
+  useEffect(() => {
+    queueRef.current = queue;
+  }, [queue]);
 
   useEffect(() => {
     fetchPin().then(setPin);
@@ -240,40 +251,131 @@ function PlayerScreen({
 
   const current = queue[index] ?? null;
 
-  // Résout l'URL jouable pour le titre courant : depuis le cache local si
-  // disponible (fonctionne hors connexion), sinon télécharge et met en cache.
-  useEffect(() => {
-    let cancelled = false;
-    if (!current) {
-      setPlayableUrl(null);
+  async function getBuffer(file: SyncFile): Promise<AudioBuffer | null> {
+    const cached = bufferCacheRef.current.get(file.id);
+    if (cached) return cached;
+    const engine = engineRef.current;
+    if (!engine) return null;
+    const arrayBuffer = await getAudioArrayBuffer(file.id, file.url);
+    if (!arrayBuffer) return null;
+    try {
+      const buf = await engine.decode(arrayBuffer);
+      bufferCacheRef.current.set(file.id, buf);
+      if (bufferCacheRef.current.size > 6) {
+        const firstKey = bufferCacheRef.current.keys().next().value;
+        if (firstKey) bufferCacheRef.current.delete(firstKey);
+      }
+      return buf;
+    } catch {
+      return null;
+    }
+  }
+
+  function toEngineTrack(file: SyncFile, buffer: AudioBuffer): EngineTrack {
+    return {
+      id: file.id,
+      buffer,
+      trimStartMs: file.trim_start_ms,
+      trimEndMs: file.trim_end_ms,
+      fadeInMs: file.fade_in_ms,
+      fadeOutMs: file.fade_out_ms,
+    };
+  }
+
+  // Cœur du moteur : planifie `idx` pour démarrer à `startAt` (temps
+  // AudioContext), puis planifie le titre suivant en avance (un seul cran)
+  // pour enchaîner sans trou — avec ou sans fondu selon fade_in_ms/
+  // fade_out_ms déjà réglés par titre dans la Bibliothèque (0 = coupe nette).
+  const scheduleTrackAt = useCallback(async (idx: number, startAt: number) => {
+    const engine = engineRef.current;
+    if (!engine || queueRef.current.length === 0) return;
+    const file = queueRef.current[idx];
+    if (!file) return;
+
+    const buffer = await getBuffer(file);
+    if (!buffer) {
+      // Pas de réseau et pas en cache : retente sans bloquer la file.
+      if (scheduleTimeoutRef.current) clearTimeout(scheduleTimeoutRef.current);
+      scheduleTimeoutRef.current = setTimeout(() => scheduleTrackAt(idx, engine.currentTime + 0.2), 5000);
       return;
     }
-    getPlayableUrl(current.id, current.url).then((url) => {
-      if (cancelled) return;
-      if (objectUrlRef.current) URL.revokeObjectURL(objectUrlRef.current);
-      objectUrlRef.current = url;
-      setPlayableUrl(url);
+
+    const track = toEngineTrack(file, buffer);
+    activeIdxRef.current = idx;
+    trackStartRef.current = startAt;
+    trimStartSecRef.current = file.trim_start_ms / 1000;
+    setIndex(idx);
+    setTrackReady(true);
+    setIsPlaying(true);
+
+    const endAt = engine.play(track, startAt, () => {
+      sendPlaybackEvent(file);
     });
+
+    const nextIdx = (idx + 1) % queueRef.current.length;
+    const nextFile = queueRef.current[nextIdx];
+    if (nextFile) {
+      const nextBuffer = await getBuffer(nextFile);
+      if (nextBuffer) {
+        const nextTrack = toEngineTrack(nextFile, nextBuffer);
+        const overlap = engine.overlapBeforeNext(track, nextTrack);
+        const nextStartAt = endAt - overlap;
+        const msUntil = Math.max(0, (nextStartAt - engine.currentTime - 4) * 1000);
+        if (scheduleTimeoutRef.current) clearTimeout(scheduleTimeoutRef.current);
+        scheduleTimeoutRef.current = setTimeout(() => scheduleTrackAt(nextIdx, nextStartAt), msUntil);
+      }
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  const goToNext = useCallback(() => {
+    const engine = engineRef.current;
+    if (!engine || queueRef.current.length === 0) return;
+    if (scheduleTimeoutRef.current) clearTimeout(scheduleTimeoutRef.current);
+    engine.stop();
+    const nextIdx = (activeIdxRef.current + 1) % queueRef.current.length;
+    scheduleTrackAt(nextIdx, engine.currentTime + 0.05);
+  }, [scheduleTrackAt]);
+
+  // Démarrage du moteur dès que la file est prête. Ne se relance pas à
+  // chaque re-sync (le scheduling en cours relit `queueRef` à la volée).
+  useEffect(() => {
+    if (queue.length === 0 || engineRef.current) return;
+    const engine = new PlaybackEngine();
+    engineRef.current = engine;
+    engine.setVolume(volume);
+
+    if (castAudioRef.current) {
+      castAudioRef.current.srcObject = engine.castStream;
+      castAudioRef.current.muted = true;
+      castAudioRef.current.play().catch(() => {});
+    }
+
+    engine.resume().finally(() => {
+      scheduleTrackAt(0, engine.currentTime + 0.2);
+    });
+
     return () => {
-      cancelled = true;
+      if (scheduleTimeoutRef.current) clearTimeout(scheduleTimeoutRef.current);
+      engine.close();
+      engineRef.current = null;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [current?.id]);
+  }, [queue.length > 0]);
 
-  // Si le titre courant n'a pas pu être résolu (hors connexion, jamais mis en
-  // cache), retente régulièrement plutôt que de rester bloqué en silence.
+  // Filet de sécurité autoplay : certains navigateurs exigent un geste
+  // utilisateur pour démarrer/reprendre l'AudioContext la toute première fois.
   useEffect(() => {
-    if (!current || playableUrl) return;
-    const retry = setInterval(() => {
-      getPlayableUrl(current.id, current.url).then((url) => {
-        if (!url) return;
-        if (objectUrlRef.current) URL.revokeObjectURL(objectUrlRef.current);
-        objectUrlRef.current = url;
-        setPlayableUrl(url);
-      });
-    }, 15_000);
-    return () => clearInterval(retry);
-  }, [current, playableUrl]);
+    function tryResume() {
+      engineRef.current?.resume();
+    }
+    document.addEventListener("click", tryResume);
+    document.addEventListener("touchstart", tryResume);
+    return () => {
+      document.removeEventListener("click", tryResume);
+      document.removeEventListener("touchstart", tryResume);
+    };
+  }, []);
 
   useEffect(() => {
     const heartbeatInterval = setInterval(() => {
@@ -285,65 +387,35 @@ function PlayerScreen({
   }, [current?.id]);
 
   useEffect(() => {
-    if (audioRef.current) audioRef.current.volume = volume;
+    engineRef.current?.setVolume(volume);
   }, [volume]);
 
-  const goToNext = useCallback(() => {
-    setIndex((i) => (queue.length > 0 ? (i + 1) % queue.length : 0));
-  }, [queue.length]);
-
+  // Affichage du temps écoulé — le moteur Web Audio n'a pas d'événement
+  // "timeupdate" natif comme <audio>, donc on le dérive de l'horloge du
+  // AudioContext toutes les 500ms.
   useEffect(() => {
-    const audio = audioRef.current;
-    if (!audio || !current || !playableUrl) return;
-    reportedRef.current = false;
+    const t = setInterval(() => {
+      const engine = engineRef.current;
+      if (!engine) return;
+      setCurrentTime(Math.max(0, engine.currentTime - trackStartRef.current + trimStartSecRef.current));
+    }, 500);
+    return () => clearInterval(t);
+  }, []);
 
-    function onLoaded() {
-      if (!audio || !current) return;
-      audio.currentTime = current.trim_start_ms / 1000;
-      audio.volume = volume;
-      audio.play().catch(() => setIsPlaying(false));
-    }
-    function onTimeUpdate() {
-      if (!audio || !current) return;
-      const endSec = current.trim_end_ms != null ? current.trim_end_ms / 1000 : audio.duration;
-      setCurrentTime(audio.currentTime - current.trim_start_ms / 1000);
-      if (!reportedRef.current && audio.currentTime >= endSec - 0.3) {
-        reportedRef.current = true;
-        sendPlaybackEvent(current);
-      }
-      if (audio.currentTime >= endSec) goToNext();
-    }
-    function onPlay() {
-      setIsPlaying(true);
-    }
-    function onPause() {
-      setIsPlaying(false);
-    }
-    function onError() {
-      // fichier illisible/corrompu (§45), ou blob de cache invalide : on passe
-      // au suivant plutôt que de bloquer la diffusion.
-      goToNext();
-    }
+  function handlePlay() {
+    engineRef.current?.resume();
+    setIsPlaying(true);
+  }
+  function handlePause() {
+    engineRef.current?.pauseContext();
+    setIsPlaying(false);
+  }
 
-    audio.addEventListener("loadedmetadata", onLoaded);
-    audio.addEventListener("timeupdate", onTimeUpdate);
-    audio.addEventListener("play", onPlay);
-    audio.addEventListener("pause", onPause);
-    audio.addEventListener("error", onError);
-    return () => {
-      audio.removeEventListener("loadedmetadata", onLoaded);
-      audio.removeEventListener("timeupdate", onTimeUpdate);
-      audio.removeEventListener("play", onPlay);
-      audio.removeEventListener("pause", onPause);
-      audio.removeEventListener("error", onError);
-    };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [current, playableUrl, goToNext]);
-
-  // Remote Playback (Chromecast) — Bluetooth n'a besoin d'aucun code, géré par
-  // Android/Chrome au niveau système.
+  // Cast (Remote Playback API) via un <audio> caché relié au flux de sortie
+  // du moteur — Bluetooth n'a besoin d'aucun code, géré par Android/Chrome
+  // au niveau système.
   useEffect(() => {
-    const audio = audioRef.current as (HTMLAudioElement & { remote?: any }) | null;
+    const audio = castAudioRef.current as (HTMLAudioElement & { remote?: any }) | null;
     if (!audio?.remote) return;
     audio.remote.watchAvailability((available: boolean) => setCastAvailable(available)).catch(() => setCastAvailable(false));
     const onConnecting = () => setCasting(true);
@@ -357,10 +429,10 @@ function PlayerScreen({
       audio.remote.removeEventListener("connect", onConnect);
       audio.remote.removeEventListener("disconnect", onDisconnect);
     };
-  }, [current]);
+  }, []);
 
   async function handleCast() {
-    const audio = audioRef.current as (HTMLAudioElement & { remote?: any }) | null;
+    const audio = castAudioRef.current as (HTMLAudioElement & { remote?: any }) | null;
     if (!audio?.remote) return;
     try {
       await audio.remote.prompt();
@@ -377,10 +449,8 @@ function PlayerScreen({
     channelRef.current = channel;
 
     channel.on("broadcast", { event: "command" }, ({ payload }: { payload: PlayerCommand }) => {
-      const audio = audioRef.current;
-      if (!audio) return;
-      if (payload.type === "play") audio.play().catch(() => {});
-      else if (payload.type === "pause") audio.pause();
+      if (payload.type === "play") handlePlay();
+      else if (payload.type === "pause") handlePause();
       else if (payload.type === "next") goToNext();
       else if (payload.type === "set_volume") setVolume(Math.min(1, Math.max(0, payload.value)));
     });
@@ -390,7 +460,7 @@ function PlayerScreen({
       channel.unsubscribe();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [session.playerId]);
+  }, [session.playerId, goToNext]);
 
   const broadcastState = useCallback(() => {
     const state: PlayerState = {
@@ -436,7 +506,7 @@ function PlayerScreen({
 
   return (
     <div className="mx-auto flex min-h-screen max-w-md flex-col bg-[#0b0f14] p-6 text-[#e8ecf1] sm:max-w-lg sm:p-8">
-      {current && playableUrl && <audio ref={audioRef} src={playableUrl} />}
+      <audio ref={castAudioRef} className="hidden" />
 
       <div className="flex items-center justify-between">
         <p className="font-mono text-xs uppercase tracking-[0.3em] text-[#3ddbc4]">AHS1</p>
@@ -506,11 +576,11 @@ function PlayerScreen({
         <p className="text-[11px] uppercase tracking-wide text-[#7c8a9c]">En lecture</p>
         <p className="mt-1 max-w-md truncate text-2xl font-medium">{current?.title ?? "En attente de contenu…"}</p>
 
-        {current && !playableUrl && (
+        {current && !trackReady && (
           <p className="mt-2 text-xs text-[#f5a623]">En attente de connexion pour télécharger ce titre…</p>
         )}
 
-        {current && playableUrl && (
+        {current && trackReady && (
           <p className="mt-2 font-mono text-xs text-[#7c8a9c]">
             {formatTime(currentTime)} / {formatTime(durationSec)}
           </p>
@@ -524,7 +594,7 @@ function PlayerScreen({
           <div className="flex items-center gap-4">
             <button
               type="button"
-              onClick={() => (isPlaying ? audioRef.current?.pause() : audioRef.current?.play())}
+              onClick={() => (isPlaying ? handlePause() : handlePlay())}
               className="flex h-14 w-14 items-center justify-center rounded-full bg-[#3ddbc4] text-2xl text-[#0b0f14]"
             >
               {isPlaying ? "⏸" : "▶"}

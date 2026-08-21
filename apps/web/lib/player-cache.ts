@@ -39,6 +39,29 @@ export async function cacheFile(fileId: string, remoteUrl: string): Promise<bool
   }
 }
 
+// Variante bas niveau pour le moteur Web Audio (decodeAudioData a besoin d'un
+// ArrayBuffer, pas d'une URL) — même logique cache-d'abord que getPlayableUrl.
+export async function getAudioArrayBuffer(fileId: string, remoteUrl: string | null): Promise<ArrayBuffer | null> {
+  if (isCacheSupported()) {
+    const cache = await caches.open(CACHE_NAME);
+    const cached = await cache.match(cacheKey(fileId));
+    if (cached) return cached.arrayBuffer();
+  }
+
+  if (!remoteUrl) return null;
+  try {
+    const res = await fetch(remoteUrl);
+    if (!res.ok) return null;
+    if (isCacheSupported()) {
+      const cache = await caches.open(CACHE_NAME);
+      await cache.put(cacheKey(fileId), res.clone());
+    }
+    return res.arrayBuffer();
+  } catch {
+    return null;
+  }
+}
+
 // Renvoie une URL lisible par <audio> : depuis le cache si disponible (marche
 // hors connexion), sinon télécharge depuis remoteUrl et met en cache au
 // passage. Renvoie null si ni l'un ni l'autre n'est possible (hors connexion
