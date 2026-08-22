@@ -15,7 +15,7 @@ const NAV_ITEMS = [
   { label: "Statistiques", href: "/stats", enabled: true },
   { label: "Historique", href: "/history", enabled: true },
   { label: "Alertes", href: "/alerts", enabled: true },
-  { label: "Paramètres", href: "/settings", enabled: false },
+  { label: "Paramètres", href: "/settings", enabled: true },
 ];
 
 export default async function DashboardLayout({
