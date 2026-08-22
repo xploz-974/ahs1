@@ -1,30 +1,41 @@
-import { getRecentActivity } from "./actions";
+import { getPlayerTimeline } from "./actions";
+import { describeEntry, diagnose, type TimelineEntry } from "@/lib/activity-diagnostics";
 
-const TYPE_LABEL: Record<string, string> = {
-  MUSIC: "🎵 Musique",
-  ADVERTISEMENT: "📢 Publicité",
-  JINGLE: "🎙️ Jingle",
-};
+export async function ActivityPanel({ playerId }: { playerId: string }) {
+  const { playback, deviceEvents } = await getPlayerTimeline(playerId);
 
-function formatDateTime(iso: string): string {
-  return new Date(iso).toLocaleString("fr-FR", { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" });
-}
+  const entries: TimelineEntry[] = [
+    ...playback.map((p) => ({ id: p.id, at: p.played_at, kind: "playback" as const, playbackType: p.type })),
+    ...deviceEvents.map((e) => ({
+      id: e.id,
+      at: e.occurred_at,
+      kind: "device" as const,
+      deviceType: e.type as TimelineEntry["deviceType"],
+      source: e.source as TimelineEntry["source"],
+      value: e.value,
+    })),
+  ].sort((a, b) => new Date(b.at).getTime() - new Date(a.at).getTime());
 
-export async function ActivityPanel({ storeId }: { storeId: string }) {
-  const activity = await getRecentActivity(storeId);
+  const explanation = diagnose(entries);
 
   return (
     <div className="mt-6 rounded-lg border border-ink-700 bg-ink-900">
       <div className="border-b border-ink-700 px-4 py-3">
-        <p className="text-sm font-medium text-ink-100">Activité récente</p>
+        <p className="text-sm font-medium text-ink-100">Journal d&apos;activité</p>
       </div>
-      <div className="max-h-64 overflow-y-auto p-4">
-        {activity.length === 0 && <p className="text-xs text-ink-500">Aucune activité enregistrée pour l&apos;instant.</p>}
+
+      {explanation && (
+        <div className="mx-4 mt-3 rounded-md border border-status-warning/30 bg-status-warning/10 px-3 py-2 text-xs text-status-warning">
+          💡 {explanation}
+        </div>
+      )}
+
+      <div className="max-h-72 overflow-y-auto p-4">
+        {entries.length === 0 && <p className="text-xs text-ink-500">Aucune activité enregistrée pour l&apos;instant.</p>}
         <ul className="space-y-1.5">
-          {activity.map((a) => (
-            <li key={a.id} className="flex items-center justify-between text-xs">
-              <span className="text-ink-300">{TYPE_LABEL[a.type] ?? a.type}</span>
-              <span className="font-mono text-ink-500">{formatDateTime(a.played_at)}</span>
+          {entries.map((e) => (
+            <li key={e.id} className="text-xs text-ink-300">
+              {describeEntry(e)}
             </li>
           ))}
         </ul>

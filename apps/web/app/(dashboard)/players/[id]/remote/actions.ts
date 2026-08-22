@@ -95,13 +95,36 @@ export interface ActivityEntry {
   played_at: string;
 }
 
-export async function getRecentActivity(storeId: string): Promise<ActivityEntry[]> {
+export interface DeviceEventRow {
+  id: string;
+  type: string;
+  source: string;
+  value: number | null;
+  occurred_at: string;
+}
+
+// Journal détaillé d'un player précis : combine playback_history et
+// device_events pour donner une timeline complète + un diagnostic si la
+// diffusion semble arrêtée sans cause déjà visible ailleurs.
+export async function getPlayerTimeline(playerId: string): Promise<{
+  playback: ActivityEntry[];
+  deviceEvents: DeviceEventRow[];
+}> {
   const supabase = createClient();
-  const { data } = await supabase
-    .from("playback_history")
-    .select("id, type, played_at")
-    .eq("store_id", storeId)
-    .order("played_at", { ascending: false })
-    .limit(15);
-  return data ?? [];
+  const [{ data: playback }, { data: deviceEvents }] = await Promise.all([
+    supabase
+      .from("playback_history")
+      .select("id, type, played_at")
+      .eq("player_id", playerId)
+      .order("played_at", { ascending: false })
+      .limit(20),
+    supabase
+      .from("device_events")
+      .select("id, type, source, value, occurred_at")
+      .eq("player_id", playerId)
+      .order("occurred_at", { ascending: false })
+      .limit(30),
+  ]);
+
+  return { playback: playback ?? [], deviceEvents: deviceEvents ?? [] };
 }

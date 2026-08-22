@@ -9,6 +9,7 @@ import {
   fetchSync,
   fetchZoneInfo,
   getStoredSession,
+  reportDeviceEvent,
   reportLocation,
   reportTamperEvent,
   sendHeartbeat,
@@ -203,6 +204,8 @@ function PlayerScreen({
   const armedRef = useRef(true);
   const baselineAccelRef = useRef<{ x: number; y: number; z: number } | null>(null);
   const lastTamperAtRef = useRef(0);
+  const volumeReportTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const [whiteNoisePlaying, setWhiteNoisePlaying] = useState(false);
 
   useEffect(() => {
     queueRef.current = queue;
@@ -322,7 +325,8 @@ function PlayerScreen({
         const now = Date.now();
         if (now - lastTamperAtRef.current < TAMPER_COOLDOWN_MS) return;
         lastTamperAtRef.current = now;
-        engineRef.current?.playAlarm(6);
+        // Système dédié au technicien : aucun son sur l'appareil du magasin,
+        // seulement une alerte qui remonte au dashboard (voir notification_rules).
         reportTamperEvent();
       }
     }
@@ -359,6 +363,17 @@ function PlayerScreen({
       window.removeEventListener("online", update);
       window.removeEventListener("offline", update);
     };
+  }, []);
+
+  // Journal d'activité : visibilité de l'onglet comme approximation de
+  // "écran allumé/éteint" — un onglet web ne peut pas observer l'état réel
+  // de l'écran de l'appareil, seulement s'il est visible ou masqué/verrouillé.
+  useEffect(() => {
+    function handleVisibility() {
+      reportDeviceEvent(document.visibilityState === "visible" ? "SCREEN_VISIBLE" : "SCREEN_HIDDEN", "system");
+    }
+    document.addEventListener("visibilitychange", handleVisibility);
+    return () => document.removeEventListener("visibilitychange", handleVisibility);
   }, []);
 
   const loadSync = useCallback(async () => {
@@ -600,6 +615,37 @@ function PlayerScreen({
     engineRef.current?.pauseContext();
     setIsPlaying(false);
   }
+  function handleTouchPlay() {
+    handlePlay();
+    reportDeviceEvent("PLAY", "touch");
+  }
+  function handleTouchPause() {
+    handlePause();
+    reportDeviceEvent("PAUSE", "touch");
+  }
+  function handleVolumeChangeTouch(v: number) {
+    setVolume(v);
+    if (volumeReportTimeoutRef.current) clearTimeout(volumeReportTimeoutRef.current);
+    volumeReportTimeoutRef.current = setTimeout(() => reportDeviceEvent("VOLUME_CHANGE", "touch", v), 800);
+  }
+  function toggleWhiteNoise() {
+    const engine = engineRef.current;
+    if (!engine) return;
+    if (whiteNoisePlaying) {
+      engine.stopWhiteNoise();
+      setWhiteNoisePlaying(false);
+      // Reprend la lecture normale — followers : rien à faire, le prochain
+      // ordre du leader relancera la lecture de lui-même.
+      if (zoneRoleRef.current !== "follower") {
+        scheduleTrackAt(activeIdxRef.current, engine.currentTime + 0.2);
+      }
+    } else {
+      if (scheduleTimeoutRef.current) clearTimeout(scheduleTimeoutRef.current);
+      engine.stop();
+      engine.startWhiteNoise();
+      setWhiteNoisePlaying(true);
+    }
+  }
 
   // Cast (Remote Playback API) via un <audio> caché relié au flux de sortie
   // du moteur — Bluetooth n'a besoin d'aucun code, géré par Android/Chrome
@@ -639,9 +685,13 @@ function PlayerScreen({
     channelRef.current = channel;
 
     channel.on("broadcast", { event: "command" }, ({ payload }: { payload: PlayerCommand }) => {
-      if (payload.type === "play") handlePlay();
-      else if (payload.type === "pause") handlePause();
-      else if (payload.type === "next") goToNext();
+      if (payload.type === "play") {
+        handlePlay();
+        reportDeviceEvent("PLAY", "remote");
+      } else if (payload.type === "pause") {
+        handlePause();
+        reportDeviceEvent("PAUSE", "remote");
+      } else if (payload.type === "next") goToNext();
       else if (payload.type === "set_volume") setVolume(Math.min(1, Math.max(0, payload.value)));
     });
 
@@ -687,6 +737,12 @@ function PlayerScreen({
       return;
     }
     setMode("technician");
+    reportDeviceEvent("TECHNICIAN_MODE_ENTER", "touch");
+  }
+
+  function exitTechnicianMode() {
+    setMode("locked");
+    reportDeviceEvent("TECHNICIAN_MODE_EXIT", "touch");
   }
 
   const next = queue[(index + 1) % queue.length] ?? null;
@@ -722,7 +778,7 @@ function PlayerScreen({
           {mode === "technician" ? (
             <button
               type="button"
-              onClick={() => setMode("locked")}
+              onClick={exitTechnicianMode}
               className="rounded-full border border-[#333d4d] px-3 py-1 text-[10px] uppercase tracking-wide text-[#3ddbc4]"
             >
               🔓 Technicien
@@ -788,7 +844,7 @@ function PlayerScreen({
         )}
 
         <div className="my-8">
-          <VolumeControl volume={volume} onChange={setVolume} />
+          <VolumeControl volume={volume} onChange={handleVolumeChangeTouch} />
         </div>
 
         {mode === "technician" && zoneInfo?.leaderPlayerId && !zoneInfo.isLeader ? (
@@ -798,7 +854,7 @@ function PlayerScreen({
             <div className="flex items-center gap-4">
               <button
                 type="button"
-                onClick={() => (isPlaying ? handlePause() : handlePlay())}
+                onClick={() => (isPlaying ? handleTouchPause() : handleTouchPlay())}
                 className="flex h-14 w-14 items-center justify-center rounded-full bg-[#3ddbc4] text-2xl text-[#0b0f14]"
               >
                 {isPlaying ? "⏸" : "▶"}
@@ -809,6 +865,16 @@ function PlayerScreen({
                 className="flex h-14 w-14 items-center justify-center rounded-full border border-[#333d4d] text-xl text-[#e8ecf1]"
               >
                 ⏭
+              </button>
+              <button
+                type="button"
+                onClick={toggleWhiteNoise}
+                title="Bruit blanc — tester les enceintes du magasin"
+                className={`flex h-14 w-14 items-center justify-center rounded-full border text-xl ${
+                  whiteNoisePlaying ? "border-[#3ddbc4] text-[#3ddbc4]" : "border-[#333d4d] text-[#e8ecf1]"
+                }`}
+              >
+                📻
               </button>
             </div>
           )

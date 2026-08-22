@@ -2,6 +2,7 @@
 
 import { useTransition } from "react";
 import { acknowledgeAlert } from "./actions";
+import { ALERT_TYPE_LABEL } from "@/lib/alert-labels";
 
 export type AlertRow = {
   id: string;
@@ -13,18 +14,7 @@ export type AlertRow = {
   players: { name: string } | null;
 };
 
-const TYPE_LABEL: Record<string, string> = {
-  PLAYER_OFFLINE: "Player hors ligne",
-  CACHE_LOW: "Cache faible",
-  STORAGE_LOW: "Stockage faible",
-  SYNC_FAILED: "Échec de synchronisation",
-  NO_CONTENT: "Aucun contenu disponible",
-  INVALID_AUDIO: "Fichier audio invalide",
-  PLAYER_OUTDATED: "Version obsolète",
-  CONNECTION_FAILURE: "Échecs de connexion répétés",
-  DEVICE_MOVED: "🛡️ Mouvement détecté",
-  DEVICE_OUT_OF_ZONE: "🛡️ Hors zone de référence",
-};
+const TYPE_LABEL: Record<string, string> = ALERT_TYPE_LABEL;
 
 const SEVERITY_STYLE: Record<string, string> = {
   INFO: "text-ink-400",

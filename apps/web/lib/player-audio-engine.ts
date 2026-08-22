@@ -31,6 +31,7 @@ export class PlaybackEngine {
   private ctx: AudioContext;
   private masterGain: GainNode;
   private voice: Voice | null = null;
+  private noise: AudioBufferSourceNode | null = null;
   private streamDest: MediaStreamAudioDestinationNode;
   // Origine commune entre l'horloge AudioContext (relative à sa création) et
   // performance.now() (horloge "murale" du navigateur) — permet de traduire
@@ -143,28 +144,42 @@ export class PlaybackEngine {
     return at + durSec;
   }
 
-  // Alarme anti-vol : sirène routée directement vers ctx.destination (PAS
-  // via masterGain) pour rester audible à plein volume même si le volume de
-  // la musique a été baissé — une alarme qu'on peut couper en baissant le
-  // volume ne sert à rien.
-  playAlarm(durationSec = 6): void {
-    const now = this.ctx.currentTime;
-    const gain = this.ctx.createGain();
-    gain.gain.setValueAtTime(1, now);
-    gain.connect(this.ctx.destination);
+  // Bruit blanc pour le technicien : sert à tester les enceintes du magasin
+  // (câblage, position, présence de son sur chaque enceinte) sans dépendre
+  // d'un morceau du catalogue. Routé via masterGain (donc affecté par le
+  // volume normal) puisque le but est justement de tester la chaîne audio
+  // habituelle, volume inclus.
+  startWhiteNoise(): void {
+    if (this.noise) return;
+    const bufferSize = 2 * this.ctx.sampleRate;
+    const buffer = this.ctx.createBuffer(1, bufferSize, this.ctx.sampleRate);
+    const data = buffer.getChannelData(0);
+    for (let i = 0; i < bufferSize; i++) data[i] = Math.random() * 2 - 1;
 
-    const osc = this.ctx.createOscillator();
-    osc.type = "square";
-    for (let t = 0; t < durationSec; t += 0.4) {
-      osc.frequency.setValueAtTime(Math.floor(t / 0.4) % 2 === 0 ? 880 : 660, now + t);
+    const source = this.ctx.createBufferSource();
+    source.buffer = buffer;
+    source.loop = true;
+    source.connect(this.masterGain);
+    source.start();
+    this.noise = source;
+  }
+
+  stopWhiteNoise(): void {
+    try {
+      this.noise?.stop();
+    } catch {
+      // déjà arrêté
     }
-    osc.connect(gain);
-    osc.start(now);
-    osc.stop(now + durationSec);
+    this.noise = null;
+  }
+
+  get isPlayingWhiteNoise(): boolean {
+    return this.noise !== null;
   }
 
   close(): void {
     this.stop();
+    this.stopWhiteNoise();
     this.ctx.close().catch(() => {});
   }
 }

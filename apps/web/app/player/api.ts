@@ -219,6 +219,30 @@ export async function reportLocation(lat: number, lng: number) {
   });
 }
 
+export type DeviceEventType =
+  | "SCREEN_VISIBLE"
+  | "SCREEN_HIDDEN"
+  | "VOLUME_CHANGE"
+  | "PLAY"
+  | "PAUSE"
+  | "TECHNICIAN_MODE_ENTER"
+  | "TECHNICIAN_MODE_EXIT";
+
+// Journal d'activité (§ demande "journal avec un fonctionnement logique") :
+// événements bruts consommés par le dashboard pour reconstituer une
+// explication lisible en cas de souci. Best-effort, ne bloque jamais l'UI.
+export async function reportDeviceEvent(
+  type: DeviceEventType,
+  source: "touch" | "remote" | "system" = "touch",
+  value?: number
+) {
+  await authorizedFetch("/api/player/device-event", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ events: [{ type, source, value: value ?? null }] }),
+  });
+}
+
 export async function sendPlaybackEvent(file: SyncFile) {
   await authorizedFetch("/api/player/playback", {
     method: "POST",

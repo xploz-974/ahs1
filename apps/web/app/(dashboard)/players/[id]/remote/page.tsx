@@ -19,7 +19,7 @@ export default async function PlayerRemotePage({ params }: { params: { id: strin
     <div className="p-8">
       <RemoteControl playerId={player.id} playerName={player.name} />
       <div className="max-w-md">
-        <ActivityPanel storeId={player.store_id} />
+        <ActivityPanel playerId={player.id} />
         <SupportPanel storeId={player.store_id} />
       </div>
     </div>

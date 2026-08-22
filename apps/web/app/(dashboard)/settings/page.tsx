@@ -3,6 +3,7 @@ import { getCurrentOrganizationId } from "@/lib/org";
 import { OrgNameForm } from "./org-name-form";
 import { InviteForm } from "./invite-form";
 import { MembersTable, type MemberRow } from "./members-table";
+import { NotificationRulesPanel, type NotificationRuleRow } from "./notification-rules-panel";
 
 export default async function SettingsPage() {
   const supabase = createClient();
@@ -26,6 +27,14 @@ export default async function SettingsPage() {
         .returns<MemberRow[]>()
     : { data: [], error: null };
 
+  const { data: notificationRules } = organizationId
+    ? await supabase
+        .from("notification_rules")
+        .select("alert_type, sound_enabled, browser_push_enabled")
+        .eq("organization_id", organizationId)
+        .returns<NotificationRuleRow[]>()
+    : { data: [] };
+
   return (
     <div className="p-8">
       <h1 className="text-lg font-medium text-ink-100">Paramètres</h1>
@@ -44,6 +53,9 @@ export default async function SettingsPage() {
         </div>
       )}
       {!error && <MembersTable members={members ?? []} currentUserId={user?.id ?? null} />}
+
+      <h2 className="mb-2 mt-8 text-sm font-medium text-ink-200">Notifications</h2>
+      <NotificationRulesPanel rules={notificationRules ?? []} />
     </div>
   );
 }

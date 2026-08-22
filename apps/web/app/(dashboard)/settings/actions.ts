@@ -101,6 +101,40 @@ export async function updateMemberRole(memberId: string, role: Role): Promise<Ac
   return { error: null, success: "Rôle mis à jour." };
 }
 
+export async function setNotificationRule(
+  alertType: string,
+  fields: { soundEnabled?: boolean; browserPushEnabled?: boolean }
+): Promise<ActionState> {
+  const supabase = createClient();
+  const organizationId = await getCurrentOrganizationId(supabase);
+  if (!organizationId) {
+    return { error: "Aucune organisation associée à ce compte.", success: null };
+  }
+
+  const { data: existing } = await supabase
+    .from("notification_rules")
+    .select("sound_enabled, browser_push_enabled")
+    .eq("organization_id", organizationId)
+    .eq("alert_type", alertType)
+    .maybeSingle();
+
+  const { error } = await supabase.from("notification_rules").upsert(
+    {
+      organization_id: organizationId,
+      alert_type: alertType,
+      sound_enabled: fields.soundEnabled ?? existing?.sound_enabled ?? true,
+      browser_push_enabled: fields.browserPushEnabled ?? existing?.browser_push_enabled ?? false,
+    },
+    { onConflict: "organization_id,alert_type" }
+  );
+
+  if (error) {
+    return { error: `Échec : ${error.message}`, success: null };
+  }
+  revalidatePath("/settings");
+  return { error: null, success: null };
+}
+
 export async function removeMember(memberId: string): Promise<ActionState> {
   const supabase = createClient();
   const organizationId = await getCurrentOrganizationId(supabase);

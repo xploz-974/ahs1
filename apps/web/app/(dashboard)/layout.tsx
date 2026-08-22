@@ -1,6 +1,8 @@
 import Link from "next/link";
 import { createClient } from "@/lib/supabase/server";
+import { getCurrentOrganizationId } from "@/lib/org";
 import { signOut } from "../login/actions";
+import { LiveNotifications } from "./live-notifications";
 
 const NAV_ITEMS = [
   { label: "Dashboard", href: "/", enabled: true },
@@ -29,8 +31,18 @@ export default async function DashboardLayout({
     data: { user },
   } = await supabase.auth.getUser();
 
+  const organizationId = await getCurrentOrganizationId(supabase);
+  const { data: notificationRules } = organizationId
+    ? await supabase.from("notification_rules").select("alert_type, sound_enabled, browser_push_enabled").eq("organization_id", organizationId)
+    : { data: [] };
+
+  const rules = Object.fromEntries(
+    (notificationRules ?? []).map((r) => [r.alert_type, { sound: r.sound_enabled, push: r.browser_push_enabled }])
+  );
+
   return (
     <div className="flex min-h-screen">
+      {organizationId && <LiveNotifications organizationId={organizationId} rules={rules} />}
       <aside className="flex w-56 shrink-0 flex-col border-r border-ink-700 bg-ink-900">
         <div className="border-b border-ink-700 px-5 py-5">
           <p className="font-mono text-xs uppercase tracking-[0.2em] text-signal">AHS1</p>
