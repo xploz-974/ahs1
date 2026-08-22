@@ -194,6 +194,31 @@ export async function sendSupportMessage(body: string, senderName: string | null
   return !!res && res.ok;
 }
 
+// null = statut sécurité inconnu (échec réseau) — on ne désactive rien dans
+// ce cas, on retente simplement au prochain appel.
+export async function fetchSecurityEnabled(): Promise<boolean | null> {
+  const res = await authorizedFetch("/api/player/config");
+  if (!res || !res.ok) return null;
+  const data = await res.json();
+  return data.player?.security_enabled ?? false;
+}
+
+export async function reportTamperEvent() {
+  await authorizedFetch("/api/player/security", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ event: "tamper" }),
+  });
+}
+
+export async function reportLocation(lat: number, lng: number) {
+  await authorizedFetch("/api/player/security", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ event: "location", lat, lng }),
+  });
+}
+
 export async function sendPlaybackEvent(file: SyncFile) {
   await authorizedFetch("/api/player/playback", {
     method: "POST",

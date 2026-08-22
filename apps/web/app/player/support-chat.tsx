@@ -67,15 +67,13 @@ export function SupportChat({ onClose }: { onClose: () => void }) {
       return;
     }
 
-    const answer = matchFaq(question);
-    if (answer) {
-      setLocal((prev) => [
-        ...prev,
-        { kind: "local-question", text: question, at: Date.now() },
-        { kind: "local-answer", text: answer, at: Date.now() },
-      ]);
-    } else {
-      setLocal((prev) => [...prev, { kind: "local-question", text: question, at: Date.now() }]);
+    const match = matchFaq(question);
+    setLocal((prev) => [
+      ...prev,
+      { kind: "local-question", text: question, at: Date.now() },
+      ...(match ? [{ kind: "local-answer" as const, text: match.answer, at: Date.now() }] : []),
+    ]);
+    if (!match || match.escalate) {
       setAwaitingEscalation(question);
     }
   }

@@ -16,7 +16,9 @@ export async function GET(request: Request) {
   const supabase = createAdminClient();
   const { data: player, error } = await supabase
     .from("players")
-    .select("id, name, type, status, app_version, configuration, zone_id, stores(id, name, timezone), player_zones(id, name, leader_player_id)")
+    .select(
+      "id, name, type, status, app_version, configuration, zone_id, security_enabled, stores(id, name, timezone), player_zones(id, name, leader_player_id)"
+    )
     .eq("id", claims.playerId)
     .eq("organization_id", claims.organizationId)
     .maybeSingle();

@@ -22,6 +22,8 @@ const TYPE_LABEL: Record<string, string> = {
   INVALID_AUDIO: "Fichier audio invalide",
   PLAYER_OUTDATED: "Version obsolète",
   CONNECTION_FAILURE: "Échecs de connexion répétés",
+  DEVICE_MOVED: "🛡️ Mouvement détecté",
+  DEVICE_OUT_OF_ZONE: "🛡️ Hors zone de référence",
 };
 
 const SEVERITY_STYLE: Record<string, string> = {

@@ -143,6 +143,26 @@ export class PlaybackEngine {
     return at + durSec;
   }
 
+  // Alarme anti-vol : sirène routée directement vers ctx.destination (PAS
+  // via masterGain) pour rester audible à plein volume même si le volume de
+  // la musique a été baissé — une alarme qu'on peut couper en baissant le
+  // volume ne sert à rien.
+  playAlarm(durationSec = 6): void {
+    const now = this.ctx.currentTime;
+    const gain = this.ctx.createGain();
+    gain.gain.setValueAtTime(1, now);
+    gain.connect(this.ctx.destination);
+
+    const osc = this.ctx.createOscillator();
+    osc.type = "square";
+    for (let t = 0; t < durationSec; t += 0.4) {
+      osc.frequency.setValueAtTime(Math.floor(t / 0.4) % 2 === 0 ? 880 : 660, now + t);
+    }
+    osc.connect(gain);
+    osc.start(now);
+    osc.stop(now + durationSec);
+  }
+
   close(): void {
     this.stop();
     this.ctx.close().catch(() => {});

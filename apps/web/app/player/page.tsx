@@ -5,9 +5,12 @@ import {
   clearSession,
   enroll,
   fetchPin,
+  fetchSecurityEnabled,
   fetchSync,
   fetchZoneInfo,
   getStoredSession,
+  reportLocation,
+  reportTamperEvent,
   sendHeartbeat,
   sendPlaybackEvent,
   type SyncFile,
@@ -183,6 +186,8 @@ function PlayerScreen({
   const [zoneInfo, setZoneInfo] = useState<ZoneInfo | null>(null);
   const [zoneChecked, setZoneChecked] = useState(false);
   const [zoneSyncQualityMs, setZoneSyncQualityMs] = useState<number | null>(null);
+  const [securityEnabled, setSecurityEnabled] = useState(false);
+  const [motionPermission, setMotionPermission] = useState<"unknown" | "granted" | "denied">("unknown");
 
   const castAudioRef = useRef<HTMLAudioElement>(null);
   const channelRef = useRef<ReturnType<typeof openPlayerChannel> | null>(null);
@@ -195,6 +200,9 @@ function PlayerScreen({
   const trimStartSecRef = useRef(0);
   const zoneSyncRef = useRef<ZoneSyncLeader | ZoneSyncFollower | null>(null);
   const zoneRoleRef = useRef<"leader" | "follower" | null>(null);
+  const armedRef = useRef(true);
+  const baselineAccelRef = useRef<{ x: number; y: number; z: number } | null>(null);
+  const lastTamperAtRef = useRef(0);
 
   useEffect(() => {
     queueRef.current = queue;
@@ -256,6 +264,86 @@ function PlayerScreen({
     }, 3000);
     return () => clearInterval(t);
   }, [zoneInfo]);
+
+  // Sécurité anti-vol (optionnelle, activée par magasin depuis le dashboard).
+  useEffect(() => {
+    fetchSecurityEnabled().then((v) => setSecurityEnabled(v ?? false));
+  }, []);
+
+  // Désarmé pendant la manipulation volontaire par un technicien (code PIN
+  // déjà requis pour entrer en mode technicien) — sinon chaque installation
+  // ou réglage déclencherait une fausse alerte.
+  useEffect(() => {
+    armedRef.current = mode !== "technician";
+  }, [mode]);
+
+  async function requestMotionPermission() {
+    const ctor = (window as unknown as { DeviceMotionEvent?: { requestPermission?: () => Promise<string> } })
+      .DeviceMotionEvent;
+    if (ctor?.requestPermission) {
+      try {
+        const result = await ctor.requestPermission();
+        setMotionPermission(result === "granted" ? "granted" : "denied");
+      } catch {
+        setMotionPermission("denied");
+      }
+    } else {
+      setMotionPermission("granted"); // Android / navigateurs sans permission dédiée (déjà actif)
+    }
+  }
+
+  // Détection de mouvement (accéléromètre) : compare chaque lecture à une
+  // référence "au repos" qui se ré-adapte lentement (0.95/0.05) pour suivre
+  // une réorientation volontaire lente, mais qui accuse un net écart lors
+  // d'un jolt brusque (qu'on empêche déjà via `armedRef` en mode technicien).
+  // Seuil et cooldown non calibrés sur matériel réel — à ajuster sur site.
+  useEffect(() => {
+    if (!securityEnabled) return;
+    const TAMPER_THRESHOLD_MS2 = 4;
+    const TAMPER_COOLDOWN_MS = 30_000;
+
+    function handleMotion(e: DeviceMotionEvent) {
+      if (!armedRef.current) return;
+      const a = e.accelerationIncludingGravity;
+      if (a?.x == null || a.y == null || a.z == null) return;
+      const current = { x: a.x, y: a.y, z: a.z };
+      const baseline = baselineAccelRef.current;
+      if (!baseline) {
+        baselineAccelRef.current = current;
+        return;
+      }
+      const delta = Math.sqrt((current.x - baseline.x) ** 2 + (current.y - baseline.y) ** 2 + (current.z - baseline.z) ** 2);
+      baselineAccelRef.current = {
+        x: baseline.x * 0.95 + current.x * 0.05,
+        y: baseline.y * 0.95 + current.y * 0.05,
+        z: baseline.z * 0.95 + current.z * 0.05,
+      };
+      if (delta > TAMPER_THRESHOLD_MS2) {
+        const now = Date.now();
+        if (now - lastTamperAtRef.current < TAMPER_COOLDOWN_MS) return;
+        lastTamperAtRef.current = now;
+        engineRef.current?.playAlarm(6);
+        reportTamperEvent();
+      }
+    }
+
+    window.addEventListener("devicemotion", handleMotion);
+    return () => window.removeEventListener("devicemotion", handleMotion);
+  }, [securityEnabled]);
+
+  // Suivi de position : la première position reçue devient la référence
+  // côté serveur (voir /api/player/security), le dashboard permet de la
+  // réinitialiser. watchPosition() n'émet que sur changement significatif
+  // (comportement du navigateur), pas besoin de throttle manuel ici.
+  useEffect(() => {
+    if (!securityEnabled || !("geolocation" in navigator)) return;
+    const watchId = navigator.geolocation.watchPosition(
+      (pos) => reportLocation(pos.coords.latitude, pos.coords.longitude),
+      () => {},
+      { enableHighAccuracy: false, maximumAge: 4 * 60_000, timeout: 20_000 }
+    );
+    return () => navigator.geolocation.clearWatch(watchId);
+  }, [securityEnabled]);
 
   // §27 — la perte réseau ne doit jamais couper la diffusion : on suit l'état
   // de connexion du navigateur en plus du succès des appels /sync, pour
@@ -726,6 +814,22 @@ function PlayerScreen({
           )
         )}
       </div>
+
+      {mode === "technician" && securityEnabled && (
+        <div className="mb-4 rounded-md border border-[#232b37] p-3 text-xs text-[#7c8a9c]">
+          <p className="mb-1 font-medium text-[#e8ecf1]">🛡️ Sécurité anti-vol activée</p>
+          <p>Détection de mouvement : désarmée tant que le mode technicien est ouvert.</p>
+          {motionPermission !== "granted" && (
+            <button
+              type="button"
+              onClick={requestMotionPermission}
+              className="mt-2 rounded-md border border-[#333d4d] px-3 py-1.5 text-[#3ddbc4]"
+            >
+              Activer la détection de mouvement
+            </button>
+          )}
+        </div>
+      )}
 
       {mode === "technician" && queue.length > 0 && (
         <div className="mb-4 max-h-40 overflow-y-auto rounded-md border border-[#232b37] p-3">

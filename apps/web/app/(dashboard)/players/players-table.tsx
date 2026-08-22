@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useState, useTransition } from "react";
-import { deletePlayer, regeneratePlayerCode, updatePlayerPin } from "./actions";
+import { deletePlayer, regeneratePlayerCode, resetHomePosition, setPlayerSecurity, updatePlayerPin } from "./actions";
 import { computeLiveStatus, STATUS_LABEL } from "@/lib/player-status";
 
 export type PlayerRow = {
@@ -15,6 +15,12 @@ export type PlayerRow = {
   last_seen: string | null;
   app_version: string | null;
   configuration: { pin?: string } | null;
+  security_enabled: boolean;
+  home_lat: number | null;
+  home_lng: number | null;
+  last_lat: number | null;
+  last_lng: number | null;
+  last_location_at: string | null;
   stores: { name: string } | null;
 };
 
@@ -83,6 +89,56 @@ function PinCell({ playerId, initialPin }: { playerId: string; initialPin: strin
   );
 }
 
+function timeAgoShort(iso: string | null): string {
+  if (!iso) return "";
+  return ` (${timeAgo(iso)})`;
+}
+
+function SecurityCell({ player }: { player: PlayerRow }) {
+  const [enabled, setEnabled] = useState(player.security_enabled);
+  const [pending, startAction] = useTransition();
+
+  const mapsUrl =
+    player.last_lat != null && player.last_lng != null
+      ? `https://www.google.com/maps?q=${player.last_lat},${player.last_lng}`
+      : null;
+
+  return (
+    <div className="flex flex-col gap-1 text-xs">
+      <label className="flex items-center gap-1.5 text-ink-300">
+        <input
+          type="checkbox"
+          checked={enabled}
+          disabled={pending}
+          onChange={(e) => {
+            const next = e.target.checked;
+            setEnabled(next);
+            startAction(async () => {
+              await setPlayerSecurity(player.id, next);
+            });
+          }}
+        />
+        Anti-vol
+      </label>
+      {enabled && mapsUrl && (
+        <a href={mapsUrl} target="_blank" rel="noreferrer" className="text-signal hover:underline">
+          Voir position{timeAgoShort(player.last_location_at)}
+        </a>
+      )}
+      {enabled && player.home_lat != null && (
+        <button
+          type="button"
+          disabled={pending}
+          onClick={() => startAction(async () => { await resetHomePosition(player.id); })}
+          className="text-left text-ink-500 hover:text-ink-300"
+        >
+          Réinitialiser la référence
+        </button>
+      )}
+    </div>
+  );
+}
+
 export function PlayersTable({
   players,
   lastCacheStatusByPlayer,
@@ -105,13 +161,14 @@ export function PlayersTable({
             <th className="px-4 py-3 font-medium">Code PIN</th>
             <th className="px-4 py-3 font-medium">Dernier contact</th>
             <th className="px-4 py-3 font-medium">Version app</th>
+            <th className="px-4 py-3 font-medium">Sécurité</th>
             <th className="px-4 py-3 font-medium"></th>
           </tr>
         </thead>
         <tbody className="divide-y divide-ink-700 bg-ink-950">
           {players.length === 0 && (
             <tr>
-              <td colSpan={9} className="px-4 py-3 text-sm text-ink-400">
+              <td colSpan={10} className="px-4 py-3 text-sm text-ink-400">
                 Aucun player pour l&apos;instant.
               </td>
             </tr>
@@ -138,6 +195,9 @@ export function PlayersTable({
               </td>
               <td className="px-4 py-3 text-xs text-ink-400">{timeAgo(p.last_seen)}</td>
               <td className="px-4 py-3 font-mono text-xs text-ink-500">{p.app_version ?? "—"}</td>
+              <td className="px-4 py-3">
+                <SecurityCell player={p} />
+              </td>
               <td className="px-4 py-3 text-right">
                 <div className="inline-flex gap-1">
                   <Link

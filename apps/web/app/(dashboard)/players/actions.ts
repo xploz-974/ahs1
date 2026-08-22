@@ -105,3 +105,25 @@ export async function deletePlayer(playerId: string): Promise<void> {
   await supabase.from("players").delete().eq("id", playerId);
   revalidatePath("/players");
 }
+
+export async function setPlayerSecurity(playerId: string, enabled: boolean): Promise<ActionState> {
+  const supabase = createClient();
+  const { error } = await supabase.from("players").update({ security_enabled: enabled }).eq("id", playerId);
+  if (error) {
+    return { error: `Échec : ${error.message}`, success: null };
+  }
+  revalidatePath("/players");
+  return { error: null, success: null };
+}
+
+// Efface la position de référence : le prochain rapport GPS de l'appareil en
+// redéfinit une nouvelle (voir /api/player/security).
+export async function resetHomePosition(playerId: string): Promise<ActionState> {
+  const supabase = createClient();
+  const { error } = await supabase.from("players").update({ home_lat: null, home_lng: null }).eq("id", playerId);
+  if (error) {
+    return { error: `Échec : ${error.message}`, success: null };
+  }
+  revalidatePath("/players");
+  return { error: null, success: "Position de référence réinitialisée." };
+}
