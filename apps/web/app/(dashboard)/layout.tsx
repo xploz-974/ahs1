@@ -12,7 +12,7 @@ const NAV_ITEMS = [
   { label: "Magasins", href: "/stores", enabled: true },
   { label: "Players", href: "/players", enabled: true },
   { label: "Support", href: "/support", enabled: true },
-  { label: "Statistiques", href: "/stats", enabled: false },
+  { label: "Statistiques", href: "/stats", enabled: true },
   { label: "Historique", href: "/history", enabled: true },
   { label: "Alertes", href: "/alerts", enabled: true },
   { label: "Paramètres", href: "/settings", enabled: false },
