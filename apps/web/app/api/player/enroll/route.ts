@@ -47,6 +47,32 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: "activation_code_expired" }, { status: 410 });
   }
 
+  // Transition atomique PENDING -> ONLINE : deux requêtes d'activation
+  // simultanées avec le même code ne doivent produire qu'un seul jeu de
+  // tokens valide. La condition .eq("status", "PENDING") fait que seule la
+  // première requête à committer affecte une ligne ; la seconde reçoit un
+  // tableau vide et échoue proprement au lieu d'émettre un second token.
+  const { data: activated, error: updateError } = await supabase
+    .from("players")
+    .update({
+      status: "ONLINE",
+      activated_at: new Date().toISOString(),
+      activation_code: null,
+      activation_code_expires_at: null,
+      last_seen: new Date().toISOString(),
+    })
+    .eq("id", player.id)
+    .eq("status", "PENDING")
+    .select("id")
+    .maybeSingle();
+
+  if (updateError) {
+    return NextResponse.json({ error: "activation_failed" }, { status: 500 });
+  }
+  if (!activated) {
+    return NextResponse.json({ error: "already_activated" }, { status: 409 });
+  }
+
   const accessToken = await signPlayerAccessToken({
     playerId: player.id,
     organizationId: player.organization_id,
@@ -63,20 +89,6 @@ export async function POST(request: Request) {
   });
   if (tokenError) {
     return NextResponse.json({ error: "token_persist_failed" }, { status: 500 });
-  }
-
-  const { error: updateError } = await supabase
-    .from("players")
-    .update({
-      status: "ONLINE",
-      activated_at: new Date().toISOString(),
-      activation_code: null,
-      activation_code_expires_at: null,
-      last_seen: new Date().toISOString(),
-    })
-    .eq("id", player.id);
-  if (updateError) {
-    return NextResponse.json({ error: "activation_failed" }, { status: 500 });
   }
 
   return NextResponse.json({

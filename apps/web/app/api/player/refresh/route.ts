@@ -34,7 +34,10 @@ export async function POST(request: Request) {
     .eq("id", tokenRow.player_id)
     .maybeSingle();
 
-  if (!player || player.status === "ERROR") {
+  // PENDING = code régénéré ou player jamais activé côté admin : l'ancien
+  // token de rafraîchissement ne doit plus permettre de revenir en session
+  // (sinon "Régénérer le code" ne révoque rien en pratique).
+  if (!player || player.status === "ERROR" || player.status === "PENDING") {
     return NextResponse.json({ error: "player_not_found" }, { status: 404 });
   }
 

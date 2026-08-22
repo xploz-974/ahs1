@@ -72,6 +72,11 @@ export async function regeneratePlayerCode(playerId: string): Promise<ActionStat
     return { error: `Échec : ${error.message}`, success: null };
   }
 
+  // Révoque les refresh tokens de l'ancienne activation : sans ça, l'ancien
+  // appareil pouvait continuer à rafraîchir son access token indéfiniment
+  // malgré la régénération du code (player_tokens n'est jamais nettoyé sinon).
+  await supabase.from("player_tokens").delete().eq("player_id", playerId);
+
   revalidatePath("/players");
   return { error: null, success: `Nouveau code : ${activationCode}` };
 }
