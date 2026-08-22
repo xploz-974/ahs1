@@ -32,6 +32,13 @@ export class PlaybackEngine {
   private masterGain: GainNode;
   private voice: Voice | null = null;
   private streamDest: MediaStreamAudioDestinationNode;
+  // Origine commune entre l'horloge AudioContext (relative à sa création) et
+  // performance.now() (horloge "murale" du navigateur) — permet de traduire
+  // un instant de lecture vers/depuis un timestamp comparable entre
+  // appareils différents, nécessaire pour la synchro multiroom (zone-sync.ts)
+  // qui échange des instants de démarrage entre plusieurs onglets/appareils.
+  private readonly perfOrigin: number;
+  private readonly ctxOrigin: number;
 
   constructor() {
     const Ctor = window.AudioContext || (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
@@ -43,10 +50,22 @@ export class PlaybackEngine {
     // sans dupliquer le son localement (cet élément reste muet en local).
     this.streamDest = this.ctx.createMediaStreamDestination();
     this.masterGain.connect(this.streamDest);
+    this.perfOrigin = performance.now();
+    this.ctxOrigin = this.ctx.currentTime;
   }
 
   get currentTime(): number {
     return this.ctx.currentTime;
+  }
+
+  // Instant AudioContext (secondes) -> timestamp performance.now() (ms).
+  contextTimeToPerfNow(ctxSec: number): number {
+    return this.perfOrigin + (ctxSec - this.ctxOrigin) * 1000;
+  }
+
+  // Timestamp performance.now() (ms) -> instant AudioContext (secondes).
+  perfNowToContextTime(perfMs: number): number {
+    return this.ctxOrigin + (perfMs - this.perfOrigin) / 1000;
   }
 
   get castStream(): MediaStream {

@@ -123,6 +123,22 @@ export async function fetchPin(): Promise<string> {
   return data.player?.configuration?.pin ?? "1990";
 }
 
+export interface ZoneInfo {
+  zoneId: string;
+  zoneName: string;
+  leaderPlayerId: string | null;
+  isLeader: boolean;
+}
+
+// null = ce player n'appartient à aucune zone multiroom (comportement
+// indépendant classique, inchangé).
+export async function fetchZoneInfo(): Promise<ZoneInfo | null> {
+  const res = await authorizedFetch("/api/player/config");
+  if (!res || !res.ok) return null;
+  const data = await res.json();
+  return data.player?.zone ?? null;
+}
+
 export async function fetchSync(): Promise<SyncResponse | null> {
   const res = await authorizedFetch("/api/player/sync");
   if (!res || !res.ok) return null;

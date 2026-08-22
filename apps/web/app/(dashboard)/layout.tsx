@@ -11,6 +11,7 @@ const NAV_ITEMS = [
   { label: "Programmation", href: "/schedule", enabled: true },
   { label: "Magasins", href: "/stores", enabled: true },
   { label: "Players", href: "/players", enabled: true },
+  { label: "Zones multiroom", href: "/zones", enabled: true },
   { label: "Support", href: "/support", enabled: true },
   { label: "Statistiques", href: "/stats", enabled: true },
   { label: "Historique", href: "/history", enabled: true },

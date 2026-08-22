@@ -6,14 +6,17 @@ import {
   enroll,
   fetchPin,
   fetchSync,
+  fetchZoneInfo,
   getStoredSession,
   sendHeartbeat,
   sendPlaybackEvent,
   type SyncFile,
+  type ZoneInfo,
 } from "./api";
 import { openPlayerChannel, type PlayerCommand, type PlayerState } from "@/lib/player-realtime";
 import { cacheFile, countCached, getAudioArrayBuffer, pruneCache } from "@/lib/player-cache";
 import { PlaybackEngine, type EngineTrack } from "@/lib/player-audio-engine";
+import { ZoneSyncLeader, ZoneSyncFollower, type ScheduleCommand } from "@/lib/zone-sync";
 import { SupportChat } from "./support-chat";
 
 const HEARTBEAT_INTERVAL_MS = 30_000;
@@ -177,6 +180,9 @@ function PlayerScreen({
   const [cachedCount, setCachedCount] = useState(0);
   const [isOffline, setIsOffline] = useState(false);
   const [trackReady, setTrackReady] = useState(false);
+  const [zoneInfo, setZoneInfo] = useState<ZoneInfo | null>(null);
+  const [zoneChecked, setZoneChecked] = useState(false);
+  const [zoneSyncQualityMs, setZoneSyncQualityMs] = useState<number | null>(null);
 
   const castAudioRef = useRef<HTMLAudioElement>(null);
   const channelRef = useRef<ReturnType<typeof openPlayerChannel> | null>(null);
@@ -187,6 +193,8 @@ function PlayerScreen({
   const activeIdxRef = useRef(0);
   const trackStartRef = useRef(0);
   const trimStartSecRef = useRef(0);
+  const zoneSyncRef = useRef<ZoneSyncLeader | ZoneSyncFollower | null>(null);
+  const zoneRoleRef = useRef<"leader" | "follower" | null>(null);
 
   useEffect(() => {
     queueRef.current = queue;
@@ -195,6 +203,59 @@ function PlayerScreen({
   useEffect(() => {
     fetchPin().then(setPin);
   }, []);
+
+  // Zone multiroom (§ conception) : un player suit soit son propre AutoDJ
+  // (comportement historique, zoneInfo === null), soit se met en attente des
+  // ordres de lecture d'un leader (isLeader === false), soit pilote sa
+  // propre lecture ET la diffuse à des followers (isLeader === true).
+  useEffect(() => {
+    fetchZoneInfo().then((z) => {
+      setZoneInfo(z);
+      setZoneChecked(true);
+    });
+  }, []);
+
+  // Réagit à un ordre "joue CE fichier à CET instant" reçu du leader —
+  // ne s'applique qu'en rôle follower. Défini avec des refs uniquement pour
+  // rester stable (pas besoin de le relister dans les deps des effets).
+  const handleZoneSchedule = useCallback(async (cmd: ScheduleCommand) => {
+    const zoneSync = zoneSyncRef.current;
+    const engine = engineRef.current;
+    if (!engine || !(zoneSync instanceof ZoneSyncFollower)) return;
+
+    const file = queueRef.current.find((f) => f.id === cmd.audioId);
+    if (!file) return; // titre absent de notre manifeste local (playlists désynchronisées) — on saute cet ordre
+
+    const buffer = await getBuffer(file);
+    if (!buffer) return;
+
+    const track = toEngineTrack(file, buffer);
+    const localPerf = zoneSync.leaderPerfToLocalPerf(cmd.startAtPerfMs);
+    const startAtCtx = engine.perfNowToContextTime(localPerf);
+
+    trackStartRef.current = startAtCtx;
+    trimStartSecRef.current = file.trim_start_ms / 1000;
+    const idx = queueRef.current.indexOf(file);
+    if (idx >= 0) {
+      activeIdxRef.current = idx;
+      setIndex(idx);
+    }
+    setTrackReady(true);
+    setIsPlaying(true);
+    engine.play(track, startAtCtx, () => sendPlaybackEvent(file));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // Indicateur de qualité de synchro affiché en mode technicien (follower
+  // uniquement) — se rafraîchit à mesure que ClockSync accumule des mesures.
+  useEffect(() => {
+    if (!zoneInfo || zoneInfo.isLeader) return;
+    const t = setInterval(() => {
+      const sync = zoneSyncRef.current;
+      if (sync instanceof ZoneSyncFollower) setZoneSyncQualityMs(sync.getSyncQualityMs());
+    }, 3000);
+    return () => clearInterval(t);
+  }, [zoneInfo]);
 
   // §27 — la perte réseau ne doit jamais couper la diffusion : on suit l'état
   // de connexion du navigateur en plus du succès des appels /sync, pour
@@ -308,6 +369,21 @@ function PlayerScreen({
     setTrackReady(true);
     setIsPlaying(true);
 
+    // En rôle leader, diffuse le même ordre de lecture aux followers de la
+    // zone — l'instant est traduit en performance.now() (comparable entre
+    // appareils) avant l'envoi, chaque follower le retraduit ensuite dans
+    // sa propre horloge via l'offset mesuré (voir zone-sync.ts).
+    if (zoneRoleRef.current === "leader" && zoneSyncRef.current instanceof ZoneSyncLeader) {
+      zoneSyncRef.current.broadcastSchedule({
+        audioId: file.id,
+        trimStartMs: file.trim_start_ms,
+        trimEndMs: file.trim_end_ms,
+        fadeInMs: file.fade_in_ms,
+        fadeOutMs: file.fade_out_ms,
+        startAtPerfMs: engine.contextTimeToPerfNow(startAt),
+      });
+    }
+
     const endAt = engine.play(track, startAt, () => {
       sendPlaybackEvent(file);
     });
@@ -329,6 +405,9 @@ function PlayerScreen({
   }, []);
 
   const goToNext = useCallback(() => {
+    // En rôle follower, l'avancement de la file est dicté par le leader —
+    // un "next" local n'aurait aucun morceau de référence à qui se fier.
+    if (zoneRoleRef.current === "follower") return;
     const engine = engineRef.current;
     if (!engine || queueRef.current.length === 0) return;
     if (scheduleTimeoutRef.current) clearTimeout(scheduleTimeoutRef.current);
@@ -337,10 +416,12 @@ function PlayerScreen({
     scheduleTrackAt(nextIdx, engine.currentTime + 0.05);
   }, [scheduleTrackAt]);
 
-  // Démarrage du moteur dès que la file est prête. Ne se relance pas à
+  // Démarrage du moteur dès que la file est prête ET que le statut de zone
+  // est connu (sinon un follower démarrerait sa propre lecture avant de
+  // savoir qu'il doit attendre les ordres du leader). Ne se relance pas à
   // chaque re-sync (le scheduling en cours relit `queueRef` à la volée).
   useEffect(() => {
-    if (queue.length === 0 || engineRef.current) return;
+    if (queue.length === 0 || engineRef.current || !zoneChecked) return;
     const engine = new PlaybackEngine();
     engineRef.current = engine;
     engine.setVolume(volume);
@@ -351,17 +432,38 @@ function PlayerScreen({
       castAudioRef.current.play().catch(() => {});
     }
 
+    if (zoneInfo && session.playerId) {
+      if (zoneInfo.isLeader) {
+        zoneRoleRef.current = "leader";
+        const leader = new ZoneSyncLeader(zoneInfo.zoneId, session.playerId);
+        leader.connect();
+        zoneSyncRef.current = leader;
+      } else if (zoneInfo.leaderPlayerId) {
+        zoneRoleRef.current = "follower";
+        const follower = new ZoneSyncFollower(zoneInfo.zoneId, session.playerId, zoneInfo.leaderPlayerId);
+        follower.connect(handleZoneSchedule);
+        zoneSyncRef.current = follower;
+      }
+    }
+
     engine.resume().finally(() => {
-      scheduleTrackAt(0, engine.currentTime + 0.2);
+      // Un follower ne choisit jamais son propre premier titre : il attend
+      // le premier ordre "schedule" du leader (voir handleZoneSchedule).
+      if (zoneRoleRef.current !== "follower") {
+        scheduleTrackAt(0, engine.currentTime + 0.2);
+      }
     });
 
     return () => {
+      zoneSyncRef.current?.destroy();
+      zoneSyncRef.current = null;
+      zoneRoleRef.current = null;
       if (scheduleTimeoutRef.current) clearTimeout(scheduleTimeoutRef.current);
       engine.close();
       engineRef.current = null;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [queue.length > 0]);
+  }, [queue.length > 0, zoneChecked]);
 
   // Filet de sécurité autoplay : certains navigateurs exigent un geste
   // utilisateur pour démarrer/reprendre l'AudioContext la toute première fois.
@@ -572,6 +674,17 @@ function PlayerScreen({
       <p className="mt-8 text-[11px] uppercase tracking-wide text-[#7c8a9c]">Magasin</p>
       <p className="text-base text-[#e8ecf1]">{session.storeName ?? "—"}</p>
 
+      {zoneInfo && (
+        <p className="mt-1 text-xs text-[#3ddbc4]">
+          🔗 Zone « {zoneInfo.zoneName} »{" "}
+          {zoneInfo.isLeader
+            ? "— leader"
+            : zoneInfo.leaderPlayerId
+              ? `— suit le leader${zoneSyncQualityMs != null ? ` (±${Math.round(zoneSyncQualityMs / 2)}ms)` : " (synchro en cours…)"}`
+              : "— aucun leader désigné"}
+        </p>
+      )}
+
       <div className="mt-8 flex flex-1 flex-col items-center justify-center text-center">
         <p className="text-[11px] uppercase tracking-wide text-[#7c8a9c]">En lecture</p>
         <p className="mt-1 max-w-md truncate text-2xl font-medium">{current?.title ?? "En attente de contenu…"}</p>
@@ -590,23 +703,27 @@ function PlayerScreen({
           <VolumeControl volume={volume} onChange={setVolume} />
         </div>
 
-        {mode === "technician" && (
-          <div className="flex items-center gap-4">
-            <button
-              type="button"
-              onClick={() => (isPlaying ? handlePause() : handlePlay())}
-              className="flex h-14 w-14 items-center justify-center rounded-full bg-[#3ddbc4] text-2xl text-[#0b0f14]"
-            >
-              {isPlaying ? "⏸" : "▶"}
-            </button>
-            <button
-              type="button"
-              onClick={goToNext}
-              className="flex h-14 w-14 items-center justify-center rounded-full border border-[#333d4d] text-xl text-[#e8ecf1]"
-            >
-              ⏭
-            </button>
-          </div>
+        {mode === "technician" && zoneInfo?.leaderPlayerId && !zoneInfo.isLeader ? (
+          <p className="text-xs text-[#7c8a9c]">Lecture pilotée par le leader de la zone.</p>
+        ) : (
+          mode === "technician" && (
+            <div className="flex items-center gap-4">
+              <button
+                type="button"
+                onClick={() => (isPlaying ? handlePause() : handlePlay())}
+                className="flex h-14 w-14 items-center justify-center rounded-full bg-[#3ddbc4] text-2xl text-[#0b0f14]"
+              >
+                {isPlaying ? "⏸" : "▶"}
+              </button>
+              <button
+                type="button"
+                onClick={goToNext}
+                className="flex h-14 w-14 items-center justify-center rounded-full border border-[#333d4d] text-xl text-[#e8ecf1]"
+              >
+                ⏭
+              </button>
+            </div>
+          )
         )}
       </div>
 
