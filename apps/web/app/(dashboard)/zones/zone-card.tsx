@@ -2,6 +2,7 @@
 
 import { useTransition } from "react";
 import { assignPlayerToZone, deleteZone, setZoneLeader } from "./actions";
+import { ZoneRemoteControl } from "./zone-remote-control";
 
 export type ZoneCardData = {
   id: string;
@@ -74,6 +75,10 @@ export function ZoneCard({
           </div>
         ))}
       </div>
+
+      {zone.members.length > 0 && (
+        <ZoneRemoteControl memberIds={zone.members.map((m) => m.id)} leaderPlayerId={zone.leaderPlayerId} />
+      )}
 
       {unassignedPlayers.length > 0 && (
         <form

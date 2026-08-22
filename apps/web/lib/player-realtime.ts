@@ -24,7 +24,11 @@ export type PlayerCommand =
   | { type: "play" }
   | { type: "pause" }
   | { type: "next" }
-  | { type: "set_volume"; value: number };
+  | { type: "set_volume"; value: number }
+  // Force un leader de zone à relancer immédiatement le titre en cours et à
+  // re-diffuser l'ordre de lecture à ses followers (voir zone-sync.ts) —
+  // sans effet sur un player hors zone ou en rôle follower.
+  | { type: "resync" };
 
 function client() {
   return createClient(

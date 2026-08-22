@@ -519,6 +519,21 @@ function PlayerScreen({
     scheduleTrackAt(nextIdx, engine.currentTime + 0.05);
   }, [scheduleTrackAt]);
 
+  // "Resynchroniser" depuis le dashboard (page Zones) : uniquement pertinent
+  // pour le leader d'une zone — relance le titre en cours depuis le début à
+  // un instant proche, ce qui re-diffuse l'ordre de lecture aux followers
+  // (voir le hook de broadcast dans scheduleTrackAt) et les réaligne tous.
+  // Marge de 1.5s pour laisser le temps au message de circuler + au buffer
+  // (déjà en cache normalement) d'être redécodé côté followers.
+  const forceResync = useCallback(() => {
+    if (zoneRoleRef.current !== "leader") return;
+    const engine = engineRef.current;
+    if (!engine || queueRef.current.length === 0) return;
+    if (scheduleTimeoutRef.current) clearTimeout(scheduleTimeoutRef.current);
+    engine.stop();
+    scheduleTrackAt(activeIdxRef.current, engine.currentTime + 1.5);
+  }, [scheduleTrackAt]);
+
   // Démarrage du moteur dès que la file est prête ET que le statut de zone
   // est connu (sinon un follower démarrerait sa propre lecture avant de
   // savoir qu'il doit attendre les ordres du leader). Ne se relance pas à
@@ -693,6 +708,7 @@ function PlayerScreen({
         reportDeviceEvent("PAUSE", "remote");
       } else if (payload.type === "next") goToNext();
       else if (payload.type === "set_volume") setVolume(Math.min(1, Math.max(0, payload.value)));
+      else if (payload.type === "resync") forceResync();
     });
 
     channel.subscribe();
@@ -700,7 +716,7 @@ function PlayerScreen({
       channel.unsubscribe();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [session.playerId, goToNext]);
+  }, [session.playerId, goToNext, forceResync]);
 
   const broadcastState = useCallback(() => {
     const state: PlayerState = {
